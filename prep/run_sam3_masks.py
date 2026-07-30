@@ -80,6 +80,38 @@ def merge_masks_from_output(out):
     return masks.any(axis=0)  # (H, W) bool
 
 
+def select_single_mask(out, ref_mask=None):
+    """Pick exactly one instance from a SAM3 detection output.
+
+    Prefers the instance overlapping ref_mask the most (keeps the same person
+    across chunk boundaries, where object ids are not stable); otherwise falls
+    back to the largest instance. Returns (mask, obj_id), or (None, None) if
+    nothing was detected.
+    """
+    masks = out["out_binary_masks"]  # (N, H, W) bool
+    obj_ids = [int(i) for i in out["out_obj_ids"]]
+    if len(masks) == 0:
+        return None, None
+
+    if ref_mask is not None and ref_mask.any():
+        overlaps = [int(np.logical_and(m, ref_mask).sum()) for m in masks]
+        best = int(np.argmax(overlaps))
+        if overlaps[best] > 0:
+            return masks[best], obj_ids[best]
+
+    areas = [int(m.sum()) for m in masks]
+    best = int(np.argmax(areas))
+    return masks[best], obj_ids[best]
+
+
+def mask_for_obj_id(out, obj_id):
+    """Mask of one tracked instance, or None if it is absent from this frame."""
+    obj_ids = [int(i) for i in out["out_obj_ids"]]
+    if obj_id not in obj_ids:
+        return None
+    return out["out_binary_masks"][obj_ids.index(obj_id)]
+
+
 def save_chunk_as_video(frames_chunk, tmpdir, chunk_idx, fps):
     """Save a chunk of frames as a temporary MP4 for SAM3 session."""
     chunk_path = os.path.join(tmpdir, f"chunk_{chunk_idx:04d}.mp4")
@@ -92,10 +124,17 @@ def save_chunk_as_video(frames_chunk, tmpdir, chunk_idx, fps):
     return chunk_path
 
 
-def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps):
-    """Segment a text prompt across the video using chunked processing to avoid OOM."""
+def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
+                           single_instance=False):
+    """Segment a text prompt across the video using chunked processing to avoid OOM.
+
+    With single_instance=True, only one tracked instance is kept per frame instead
+    of the union of all detections: the largest instance at the start of the first
+    chunk, then whichever instance best overlaps the previous chunk's last mask.
+    """
     num_frames = len(frames)
     all_masks = {}
+    prev_mask = None  # last non-empty mask, for continuity across chunks
 
     tmpdir = tempfile.mkdtemp(prefix="sam3_chunks_")
     try:
@@ -140,15 +179,28 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps):
                 continue
 
             # Store frame 0 mask from detection
-            all_masks[chunk_start] = merge_masks_from_output(det_out)
+            tracked_id = None
+            if single_instance:
+                mask, tracked_id = select_single_mask(det_out, ref_mask=prev_mask)
+                print(f"      Tracking instance {tracked_id} of {n_detected} detected")
+            else:
+                mask = merge_masks_from_output(det_out)
+            all_masks[chunk_start] = mask
+            if mask is not None and mask.any():
+                prev_mask = mask
 
             # Propagate through chunk
             for resp in predictor.handle_stream_request(
                 request=dict(type="propagate_in_video", session_id=session_id)
             ):
                 fi = resp["frame_index"]
-                mask = merge_masks_from_output(resp["outputs"])
+                if single_instance:
+                    mask = mask_for_obj_id(resp["outputs"], tracked_id)
+                else:
+                    mask = merge_masks_from_output(resp["outputs"])
                 all_masks[chunk_start + fi] = mask
+                if mask is not None and mask.any():
+                    prev_mask = mask
 
             # Close session to free GPU memory
             predictor.handle_request(request=dict(type="close_session", session_id=session_id))
@@ -250,9 +302,10 @@ def main():
     gpus_to_use = list(range(torch.cuda.device_count()))
     predictor = build_sam3_video_predictor(gpus_to_use=gpus_to_use)
 
-    # Segment human (chunked)
+    # Segment human (chunked) — always a single instance, CARI4D fits one body
     print(f"Segmenting human: '{args.human_prompt}'...")
-    human_masks = segment_prompt_chunked(predictor, frames, args.human_prompt, args.chunk_size, fps)
+    human_masks = segment_prompt_chunked(predictor, frames, args.human_prompt, args.chunk_size, fps,
+                                         single_instance=True)
     human_count = sum(1 for m in human_masks.values() if m is not None and m.any())
     print(f"  Human masks found in {human_count}/{num_frames} frames")
 
