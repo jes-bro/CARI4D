@@ -42,6 +42,27 @@ def parse_args():
                         help="HuggingFace token for SAM3 checkpoint access")
     parser.add_argument("--chunk_size", type=int, default=300,
                         help="Process video in chunks of this many frames to avoid OOM (default: 300)")
+    parser.add_argument("--zoom", action="store_true",
+                        help="Visualization: magnified inset around the object. Use it when "
+                             "the object is small (a ball is ~18px) and you cannot otherwise "
+                             "see whether the mask is on it")
+    parser.add_argument("--zoom_size", type=int, default=140)
+    # --- trimming: cut the sequence down to a stretch where BOTH masks hold ---
+    parser.add_argument("--trim_to_tracked", action="store_true",
+                        help="Also write <seq>_trim.0.color.mp4 + masks covering the longest "
+                             "run of frames where BOTH masks are present. SAM3 loses small "
+                             "fast objects for most of a take; this salvages the usable part")
+    parser.add_argument("--trim_gap_tolerance", type=int, default=0,
+                        help="Bridge dropouts of up to N frames when finding runs (default 0). "
+                             "Bridged frames keep their empty masks, so this trades mask "
+                             "coverage for clip length")
+    parser.add_argument("--trim_min_person_px", type=int, default=1,
+                        help="Min human mask area to count as tracked (default 1)")
+    parser.add_argument("--trim_min_object_px", type=int, default=1,
+                        help="Min object mask area to count as tracked (default 1). Raise it "
+                             "to reject a few-pixel spurious blob")
+    parser.add_argument("--trim_rank", type=int, default=1,
+                        help="Take the Nth longest run (1 = longest)")
     return parser.parse_args()
 
 
@@ -242,24 +263,197 @@ def save_masks_h5(human_masks, object_masks, output_path, seq_name, kid, frame_s
     print(f"Saved masks to {output_path} ({num_frames} frames)")
 
 
-def save_visualization(frames, human_masks, object_masks, output_path, fps=30):
-    """Save side-by-side visualization: left=RGB, right=RGB+masks overlay."""
+PERSON_RGB = np.array([255, 0, 0])      # overlay colour for the human mask
+OBJECT_RGB = np.array([0, 0, 255])      # overlay colour for the object mask
+ALPHA = 0.5
+STRIP_H = 18                            # height of the tracked/lost timeline bar
+
+
+def _mask_or_empty(masks, idx, shape):
+    """masks[idx], or an all-False mask. A dropped track is an EMPTY mask here,
+    not a missing key, so downstream code can treat both the same way."""
+    m = masks.get(idx)
+    if m is None:
+        return np.zeros(shape, dtype=bool)
+    return m.astype(bool)
+
+
+def mask_areas(human_masks, object_masks, num_frames, shape):
+    """Per-frame pixel counts for both masks, as (person, object) int arrays."""
+    per = np.array([_mask_or_empty(human_masks, i, shape).sum() for i in range(num_frames)])
+    obj = np.array([_mask_or_empty(object_masks, i, shape).sum() for i in range(num_frames)])
+    return per, obj
+
+
+def find_tracked_runs(good, gap_tolerance=0):
+    """Contiguous runs of True in `good` as inclusive (start, end) index pairs.
+
+    gap_tolerance bridges short dropouts so a single lost frame does not split a
+    long usable stretch. Bridged frames stay in the run with their empty masks,
+    which is a real cost -- hence a default of 0, so bridging is always a choice
+    the caller made explicitly.
+    """
+    runs, start, gap, last_good = [], None, 0, None
+    for i, v in enumerate(good):
+        if v:
+            if start is None:
+                start, gap = i, 0
+            else:
+                gap = 0
+            last_good = i
+        elif start is not None:
+            gap += 1
+            if gap > gap_tolerance:
+                runs.append((start, last_good))
+                start = None
+    if start is not None:
+        runs.append((start, last_good))
+    return runs
+
+
+def object_bbox(mask, pad=12):
+    """Padded (x0, y0, x1, y1) around a mask, or None when it is empty."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    H, W = mask.shape
+    return (max(0, xs.min() - pad), max(0, ys.min() - pad),
+            min(W, xs.max() + 1 + pad), min(H, ys.max() + 1 + pad))
+
+
+def timeline_strip(good, width, height=STRIP_H, cursor=None):
+    """Whole-sequence tracked/lost bar: green tracked, dark red lost, yellow cursor.
+
+    A column is green only if EVERY frame it covers is tracked, so a one-frame
+    dropout stays visible instead of being averaged into a healthy-looking bar.
+    """
+    n = len(good)
+    edges = (np.arange(width + 1) * n / width).astype(int)
+    strip = np.zeros((height, width, 3), dtype=np.uint8)
+    for i in range(width):
+        lo, hi = edges[i], max(edges[i] + 1, edges[i + 1])
+        strip[:, i] = (60, 190, 90) if good[lo:hi].all() else (150, 30, 30)
+    if cursor is not None and n > 0:
+        c = min(width - 1, int(cursor * width / n))
+        strip[:, max(0, c - 1):c + 2] = (255, 220, 0)
+    return strip
+
+
+def zoom_inset(img, bbox, size=140):
+    """Nearest-neighbour magnification of bbox, letterboxed into size x size.
+
+    The object can be tiny (a basketball is ~18x18px in a 796x448 frame); at 1x
+    you cannot tell whether the mask is on the object, on a shadow, or on
+    nothing -- which is the whole question when judging a take.
+    """
+    x0, y0, x1, y1 = bbox
+    crop = img[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    h, w = crop.shape[:2]
+    k = max(1, int(min(size / max(w, 1), size / max(h, 1))))
+    big = np.repeat(np.repeat(crop, k, axis=0), k, axis=1)
+    out = np.zeros((size, size, 3), dtype=np.uint8)
+    bh, bw = min(size, big.shape[0]), min(size, big.shape[1])
+    out[:bh, :bw] = big[:bh, :bw]
+    return out
+
+
+def _hud(img, lines):
+    """Small text block with a dark plate behind it, readable over any frame."""
+    for i, text in enumerate(lines):
+        y = 16 + i * 16
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        cv2.rectangle(img, (4, y - th - 4), (8 + tw, y + 4), (0, 0, 0), -1)
+        cv2.putText(img, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 255), 1, cv2.LINE_AA)
+    return img
+
+
+def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
+                       zoom=False, zoom_size=140, min_person_px=1, min_object_px=1):
+    """Side-by-side visualization: left=RGB, right=RGB+masks overlay.
+
+    Overlay colours are unchanged (human red, object blue, alpha 0.5). Added on
+    top: a per-frame HUD (frame index, both mask areas, TRACKED/LOST), a timeline
+    strip showing the whole sequence's tracked/lost pattern with a cursor, and an
+    optional magnified inset around the object.
+    """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     writer = imageio.get_writer(output_path, fps=fps)
 
+    shape = frames[0].shape[:2]
+    n = len(frames)
+    per, obj = mask_areas(human_masks, object_masks, n, shape)
+    good = (per >= min_person_px) & (obj >= min_object_px)
+    out_w = frames[0].shape[1] * 2
+
     for idx, frame in enumerate(frames):
         overlay = frame.copy()
-        hm = human_masks.get(idx)
-        if hm is not None and hm.any():
-            overlay[hm] = (overlay[hm] * 0.5 + np.array([255, 0, 0]) * 0.5).astype(np.uint8)
-        om = object_masks.get(idx)
-        if om is not None and om.any():
-            overlay[om] = (overlay[om] * 0.5 + np.array([0, 0, 255]) * 0.5).astype(np.uint8)
+        hm = _mask_or_empty(human_masks, idx, shape)
+        om = _mask_or_empty(object_masks, idx, shape)
+        if hm.any():
+            overlay[hm] = (overlay[hm] * (1 - ALPHA) + PERSON_RGB * ALPHA).astype(np.uint8)
+        if om.any():
+            overlay[om] = (overlay[om] * (1 - ALPHA) + OBJECT_RGB * ALPHA).astype(np.uint8)
+
+        if zoom:
+            bb = object_bbox(om)
+            if bb is not None:
+                cv2.rectangle(overlay, (bb[0], bb[1]), (bb[2], bb[3]), (0, 255, 255), 1)
+                ins = zoom_inset(overlay, bb, zoom_size)
+                if ins is not None:
+                    overlay[0:ins.shape[0], overlay.shape[1] - ins.shape[1]:] = ins
+
+        overlay = _hud(overlay, [f"f{idx}  {'TRACKED' if good[idx] else 'LOST'}",
+                                 f"person {int(per[idx])}px",
+                                 f"object {int(obj[idx])}px"])
         combined = np.concatenate([frame, overlay], axis=1)
+        combined = np.concatenate(
+            [combined, timeline_strip(good, out_w, STRIP_H, cursor=idx)], axis=0)
         writer.append_data(combined)
 
     writer.close()
     print(f"Saved visualization to {output_path}")
+
+
+def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
+                 video_path, masks_dir, fps=30, meta=None):
+    """Write a trimmed clip + masks for frames [lo, hi], as a NEW sequence.
+
+    Named `<seq>_trim` following CARI4D's own contract (`<seq>.0.color.mp4` and
+    `<seq>_masks_k<kid>.h5`), so the rest of the pipeline can be pointed straight
+    at the trimmed sequence with no other changes:
+
+        bash scripts/demo-custom.sh <seq>_trim.0.color.mp4
+    """
+    import json
+    trim_seq = f"{seq_name}_trim"
+    videos_dir = os.path.dirname(os.path.abspath(video_path))
+    out_video = os.path.join(videos_dir, f"{trim_seq}.0.color.mp4")
+    out_h5 = os.path.join(masks_dir, f"{trim_seq}_masks_k{kid}.h5")
+
+    writer = imageio.get_writer(out_video, fps=fps)
+    for i in range(lo, hi + 1):
+        writer.append_data(frames[i])
+    writer.close()
+
+    # Renumber from 0 so the trimmed sequence is self-consistent.
+    hm = {j: human_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
+    om = {j: object_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
+    save_masks_h5(hm, om, out_h5, trim_seq, kid, frames[0].shape)
+
+    manifest = dict(source_sequence=seq_name, source_video=os.path.abspath(video_path),
+                    source_frame_start=int(lo), source_frame_end=int(hi),
+                    n_frames=int(hi - lo + 1), fps=float(fps), **(meta or {}))
+    with open(os.path.join(masks_dir, f"{trim_seq}_trim_manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"Saved trimmed clip  -> {out_video}  ({hi - lo + 1} frames)")
+    print(f"Saved trimmed masks -> {out_h5}")
+    print(f"Run the pipeline on it with: bash scripts/demo-custom.sh "
+          f"{os.path.basename(out_video)}")
+    return out_video, out_h5
 
 
 def main():
@@ -321,10 +515,53 @@ def main():
     # Save H5
     save_masks_h5(human_masks, object_masks, h5_path, seq_name, args.kid, frames[0].shape)
 
+    # --- Tracking report. Per-mask counts above do not say whether the two ever
+    # hold AT THE SAME TIME, which is what actually determines usability. ---
+    shape = frames[0].shape[:2]
+    per, obj = mask_areas(human_masks, object_masks, num_frames, shape)
+    good = (per >= args.trim_min_person_px) & (obj >= args.trim_min_object_px)
+    runs = sorted(find_tracked_runs(good, args.trim_gap_tolerance),
+                  key=lambda r: -(r[1] - r[0] + 1))
+    print(f"\nBoth masks present in {int(good.sum())}/{num_frames} frames "
+          f"({100.0 * good.mean():.1f}%)")
+    print(f"Longest contiguous runs (gap_tolerance={args.trim_gap_tolerance}):")
+    for r, (lo, hi) in enumerate(runs[:5], start=1):
+        n = hi - lo + 1
+        print(f"   #{r} frames {lo}-{hi}  {n} frames  {n / fps:.1f}s")
+    if not runs:
+        print("   NONE -- the human and the object are never tracked together.")
+
     # Visualization
     if args.visualize:
         vis_path = os.path.join(args.output_dir, f"{seq_name}_sam3_vis.mp4")
-        save_visualization(frames, human_masks, object_masks, vis_path, fps=fps)
+        save_visualization(frames, human_masks, object_masks, vis_path, fps=fps,
+                           zoom=args.zoom, zoom_size=args.zoom_size,
+                           min_person_px=args.trim_min_person_px,
+                           min_object_px=args.trim_min_object_px)
+
+    # Trimmed sequence
+    if args.trim_to_tracked:
+        if not runs:
+            # Fail loudly: silently skipping would look like the trim succeeded.
+            print("ERROR: --trim_to_tracked requested but no frame has both masks; "
+                  "nothing to trim.", file=sys.stderr)
+            sys.exit(1)
+        if args.trim_rank > len(runs):
+            print(f"ERROR: --trim_rank {args.trim_rank} but only {len(runs)} runs exist.",
+                  file=sys.stderr)
+            sys.exit(1)
+        lo, hi = runs[args.trim_rank - 1]
+        covered = float(good[lo:hi + 1].mean())
+        print(f"\nTrimming to run #{args.trim_rank}: frames {lo}-{hi} "
+              f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
+              f"both masks present in {100 * covered:.1f}% of them)")
+        save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
+                     args.video, args.output_dir, fps=fps,
+                     meta=dict(gap_tolerance=args.trim_gap_tolerance,
+                               min_person_px=args.trim_min_person_px,
+                               min_object_px=args.trim_min_object_px,
+                               rank=args.trim_rank,
+                               both_masks_fraction=round(covered, 4)))
 
     print("Done!")
 
