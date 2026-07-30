@@ -1,11 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=hy3d-recon
-#SBATCH --output=hy3d-recon-%j.out
-#SBATCH --gres=gpu:1
+#SBATCH --account=simurgh
+#SBATCH --partition=simurgh --qos=normal
+#SBATCH --time=04:00:00
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
-# NOTE: add your --partition / --account here to match slurm_sam3_masks.sh.
+#SBATCH --gres=gpu:1
+
+#SBATCH --job-name="hy3d-recon"
+#SBATCH --output=hy3d-recon-%j.out
+
+#SBATCH --mail-user=jesb@stanford.edu
+#SBATCH --mail-type=ALL
 
 # Object reconstruction (Step 2 of docs/custom_video.md): RGBA crop from the
 # video + object mask, Hunyuan3D shape and texture, GLB -> OBJ via Blender.
@@ -32,7 +38,7 @@ export HF_HOME=/simurgh2/projects/ret-hoi/hf_cache
 export HY3DGEN_MODELS=/simurgh2/projects/ret-hoi/hy3dgen_cache
 mkdir -p "$HF_HOME" "$HY3DGEN_MODELS"
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
+source ~/.bashrc
 conda activate hy3d
 
 cd "$REPO"
