@@ -433,51 +433,38 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
 
 
 def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
-                 video_path, out_root, fps=30, meta=None, subdir="trimmed"):
-    """Write a trimmed clip + masks for frames [lo, hi], as a NEW sequence.
+                 out_dir, fps=30, video_subdir="trimmed_vids"):
+    """Write frames [lo, hi] as a normal sequence: a clip and its masks.
 
-    Named `<seq>_trim` following CARI4D's own contract (`<seq>.0.color.mp4` and
-    `<seq>_masks_k<kid>.h5`), so the rest of the pipeline can be pointed straight
-    at the trimmed sequence:
+    Deliberately NOT a special artifact -- no suffix, no manifest. The trimmed
+    masks ARE the masks (`<seq>_masks_k<kid>.h5` in out_dir, so masks_root is
+    unchanged), and the clip keeps the plain `<seq>.0.color.mp4` name. Downstream
+    cannot tell a trim happened; it is just a shorter take.
 
-        bash scripts/demo-custom.sh <path>/<seq>_trim.0.color.mp4
-
-    Everything goes to `<out_root>/<subdir>/` -- i.e. a `trimmed/` folder under
-    --output_dir. Two reasons for the subdir rather than dropping it beside the
-    masks: the trimmed h5 is also named `*_masks_k<kid>.h5`, so sharing a folder
-    with the source masks means any glob downstream can pick up the wrong one;
-    and it keeps a derived artifact visibly separate from the raw output.
-
-    NOT next to the source video: source takes routinely live on read-only shared
-    storage -- writing the clip beside /vision/group/egoexo4d/.../cam04.mp4 fails
-    with Permission denied, whereas --output_dir is writable by definition, the
-    masks just went there.
+    The clip goes in its own `video_subdir` because demo-custom.sh writes into
+    dirname(video) -- unidepth's output lands there (`-o ${video_dir}`) and a
+    sibling `<video_dir>-aligned/` is created. Pointing that at the masks folder
+    would fill it with depth output. It also cannot go next to the source video,
+    which is typically read-only shared storage.
     """
-    import json
-    trim_seq = f"{seq_name}_trim"
-    out_dir = os.path.join(out_root, subdir)
+    vid_dir = os.path.join(out_dir, video_subdir)
+    os.makedirs(vid_dir, exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
-    out_video = os.path.join(out_dir, f"{trim_seq}.0.color.mp4")
-    out_h5 = os.path.join(out_dir, f"{trim_seq}_masks_k{kid}.h5")
+    out_video = os.path.join(vid_dir, f"{seq_name}.0.color.mp4")
+    out_h5 = os.path.join(out_dir, f"{seq_name}_masks_k{kid}.h5")
 
     writer = imageio.get_writer(out_video, fps=fps)
     for i in range(lo, hi + 1):
         writer.append_data(frames[i])
     writer.close()
 
-    # Renumber from 0 so the trimmed sequence is self-consistent.
+    # Renumber from 0 so the sequence is self-consistent.
     hm = {j: human_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
     om = {j: object_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
-    save_masks_h5(hm, om, out_h5, trim_seq, kid, frames[0].shape)
+    save_masks_h5(hm, om, out_h5, seq_name, kid, frames[0].shape)
 
-    manifest = dict(source_sequence=seq_name, source_video=os.path.abspath(video_path),
-                    source_frame_start=int(lo), source_frame_end=int(hi),
-                    n_frames=int(hi - lo + 1), fps=float(fps), **(meta or {}))
-    with open(os.path.join(out_dir, f"{trim_seq}_manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=2)
-
-    print(f"Saved trimmed clip  -> {out_video}  ({hi - lo + 1} frames)")
-    print(f"Saved trimmed masks -> {out_h5}")
+    print(f"Saved clip  -> {out_video}  ({hi - lo + 1} frames, source frames {lo}-{hi})")
+    print(f"Saved masks -> {out_h5}")
     print(f"Run the pipeline on it with: bash scripts/demo-custom.sh {out_video}")
     return out_video, out_h5
 
@@ -538,11 +525,8 @@ def main():
     # Shutdown predictor
     predictor.shutdown()
 
-    # Save H5
-    save_masks_h5(human_masks, object_masks, h5_path, seq_name, args.kid, frames[0].shape)
-
-    # --- Tracking report. Per-mask counts above do not say whether the two ever
-    # hold AT THE SAME TIME, which is what actually determines usability. ---
+    # --- Tracking report. The per-mask counts above do not say whether the two
+    # hold AT THE SAME TIME, which is what decides whether the take is usable. ---
     shape = frames[0].shape[:2]
     per, obj = mask_areas(human_masks, object_masks, num_frames, shape)
     good = (per >= args.trim_min_person_px) & (obj >= args.trim_min_object_px)
@@ -557,7 +541,8 @@ def main():
     if not runs:
         print("   NONE -- the human and the object are never tracked together.")
 
-    # Visualization
+    # Visualization of the WHOLE take -- it is the diagnostic for where tracking
+    # holds, so trimming it first would hide exactly what you want to see.
     if args.visualize:
         vis_path = os.path.join(args.output_dir, f"{seq_name}_sam3_vis.mp4")
         save_visualization(frames, human_masks, object_masks, vis_path, fps=fps,
@@ -565,41 +550,34 @@ def main():
                            min_person_px=args.trim_min_person_px,
                            min_object_px=args.trim_min_object_px)
 
-    # Trimmed sequence
-    if args.trim_to_tracked:
-        if not runs:
-            # Loud, but NOT fatal: the masks generated fine and are already saved.
-            # Trimming is on by default, so exiting non-zero here would fail a
-            # perfectly good mask run just because this take has no usable stretch.
-            # Say so unmissably instead -- no trim written is the correct outcome,
-            # and it must not be mistaken for one that succeeded.
-            print("\n" + "!" * 72, file=sys.stderr)
-            print("NO TRIM WRITTEN: the human and the object are never tracked in the "
-                  "same frame.", file=sys.stderr)
-            print("The masks above are still valid. This take has no usable stretch -- "
-                  "check the", file=sys.stderr)
-            print("visualization, then retry with different prompts or a larger "
-                  "--trim_gap_tolerance.", file=sys.stderr)
-            print("!" * 72 + "\n", file=sys.stderr)
-        elif args.trim_rank > len(runs):
-            # Explicitly asked for a run that does not exist -- that IS a user
-            # error, unlike the no-runs case above, so fail.
+    # --- Masks are written ONCE, and by default they are the trimmed ones: the
+    # full-length masks are not wanted, only the stretch that is actually usable.
+    if args.trim_to_tracked and runs:
+        if args.trim_rank > len(runs):
             print(f"ERROR: --trim_rank {args.trim_rank} but only {len(runs)} runs exist.",
                   file=sys.stderr)
             sys.exit(1)
-        else:
-            lo, hi = runs[args.trim_rank - 1]
-            covered = float(good[lo:hi + 1].mean())
-            print(f"\nTrimming to run #{args.trim_rank}: frames {lo}-{hi} "
-                  f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
-                  f"both masks present in {100 * covered:.1f}% of them)")
-            save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
-                         args.video, args.output_dir, fps=fps,
-                         meta=dict(gap_tolerance=args.trim_gap_tolerance,
-                                   min_person_px=args.trim_min_person_px,
-                                   min_object_px=args.trim_min_object_px,
-                                   rank=args.trim_rank,
-                                   both_masks_fraction=round(covered, 4)))
+        lo, hi = runs[args.trim_rank - 1]
+        covered = float(good[lo:hi + 1].mean())
+        print(f"\nTrimming to run #{args.trim_rank}: source frames {lo}-{hi} "
+              f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
+              f"both masks present in {100 * covered:.1f}% of them)")
+        save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
+                     args.output_dir, fps=fps)
+    else:
+        # Either trimming is off, or nothing is usable. Save the full masks
+        # regardless -- an expensive SAM3 run must never end with nothing on disk.
+        if args.trim_to_tracked and not runs:
+            print("\n" + "!" * 72, file=sys.stderr)
+            print("NOT TRIMMED: the human and the object are never tracked in the same "
+                  "frame.", file=sys.stderr)
+            print("Saving the FULL-length masks instead so the run is not wasted. Check "
+                  "the", file=sys.stderr)
+            print("visualization, then retry with different prompts or a larger "
+                  "--trim_gap_tolerance.", file=sys.stderr)
+            print("!" * 72 + "\n", file=sys.stderr)
+        save_masks_h5(human_masks, object_masks, h5_path, seq_name, args.kid,
+                      frames[0].shape)
 
     print("Done!")
 
