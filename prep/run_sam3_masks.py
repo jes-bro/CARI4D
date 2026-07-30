@@ -433,20 +433,32 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
 
 
 def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
-                 video_path, masks_dir, fps=30, meta=None):
+                 video_path, out_root, fps=30, meta=None, subdir="trimmed"):
     """Write a trimmed clip + masks for frames [lo, hi], as a NEW sequence.
 
     Named `<seq>_trim` following CARI4D's own contract (`<seq>.0.color.mp4` and
     `<seq>_masks_k<kid>.h5`), so the rest of the pipeline can be pointed straight
-    at the trimmed sequence with no other changes:
+    at the trimmed sequence:
 
-        bash scripts/demo-custom.sh <seq>_trim.0.color.mp4
+        bash scripts/demo-custom.sh <path>/<seq>_trim.0.color.mp4
+
+    Everything goes to `<out_root>/<subdir>/` -- i.e. a `trimmed/` folder under
+    --output_dir. Two reasons for the subdir rather than dropping it beside the
+    masks: the trimmed h5 is also named `*_masks_k<kid>.h5`, so sharing a folder
+    with the source masks means any glob downstream can pick up the wrong one;
+    and it keeps a derived artifact visibly separate from the raw output.
+
+    NOT next to the source video: source takes routinely live on read-only shared
+    storage -- writing the clip beside /vision/group/egoexo4d/.../cam04.mp4 fails
+    with Permission denied, whereas --output_dir is writable by definition, the
+    masks just went there.
     """
     import json
     trim_seq = f"{seq_name}_trim"
-    videos_dir = os.path.dirname(os.path.abspath(video_path))
-    out_video = os.path.join(videos_dir, f"{trim_seq}.0.color.mp4")
-    out_h5 = os.path.join(masks_dir, f"{trim_seq}_masks_k{kid}.h5")
+    out_dir = os.path.join(out_root, subdir)
+    os.makedirs(out_dir, exist_ok=True)
+    out_video = os.path.join(out_dir, f"{trim_seq}.0.color.mp4")
+    out_h5 = os.path.join(out_dir, f"{trim_seq}_masks_k{kid}.h5")
 
     writer = imageio.get_writer(out_video, fps=fps)
     for i in range(lo, hi + 1):
@@ -461,13 +473,12 @@ def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
     manifest = dict(source_sequence=seq_name, source_video=os.path.abspath(video_path),
                     source_frame_start=int(lo), source_frame_end=int(hi),
                     n_frames=int(hi - lo + 1), fps=float(fps), **(meta or {}))
-    with open(os.path.join(masks_dir, f"{trim_seq}_trim_manifest.json"), "w") as f:
+    with open(os.path.join(out_dir, f"{trim_seq}_manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
 
     print(f"Saved trimmed clip  -> {out_video}  ({hi - lo + 1} frames)")
     print(f"Saved trimmed masks -> {out_h5}")
-    print(f"Run the pipeline on it with: bash scripts/demo-custom.sh "
-          f"{os.path.basename(out_video)}")
+    print(f"Run the pipeline on it with: bash scripts/demo-custom.sh {out_video}")
     return out_video, out_h5
 
 
