@@ -37,25 +37,40 @@ def parse_args():
     parser.add_argument("--kid", type=int, default=0, help="Camera/kinect id (default 0)")
     parser.add_argument("--output_dir", default=None,
                         help="Output directory for masks H5 (default: sibling masks/ folder)")
-    parser.add_argument("--visualize", action="store_true", help="Save visualization MP4")
+    # ON BY DEFAULT. The visualization and the trim are the whole point of a run
+    # on a wild take -- you cannot judge whether SAM3 held without looking, and a
+    # take is rarely usable end to end. Kept as an accepted no-op so existing
+    # callers that pass --visualize keep working.
+    parser.add_argument("--visualize", action="store_true", default=True,
+                        help="Save visualization MP4 (DEFAULT ON; --no_visualize to skip)")
+    parser.add_argument("--no_visualize", dest="visualize", action="store_false",
+                        help="Skip the visualization MP4")
     parser.add_argument("--hf_token", default=None,
                         help="HuggingFace token for SAM3 checkpoint access")
     parser.add_argument("--chunk_size", type=int, default=300,
                         help="Process video in chunks of this many frames to avoid OOM (default: 300)")
-    parser.add_argument("--zoom", action="store_true",
-                        help="Visualization: magnified inset around the object. Use it when "
-                             "the object is small (a ball is ~18px) and you cannot otherwise "
-                             "see whether the mask is on it")
+    parser.add_argument("--zoom", action="store_true", default=True,
+                        help="Visualization: magnified inset around the object (DEFAULT ON). "
+                             "A ball is ~18px in a 796x448 frame; at 1x you cannot tell "
+                             "whether the mask is on it. --no_zoom to skip")
+    parser.add_argument("--no_zoom", dest="zoom", action="store_false",
+                        help="Skip the magnified object inset")
     parser.add_argument("--zoom_size", type=int, default=140)
     # --- trimming: cut the sequence down to a stretch where BOTH masks hold ---
-    parser.add_argument("--trim_to_tracked", action="store_true",
-                        help="Also write <seq>_trim.0.color.mp4 + masks covering the longest "
-                             "run of frames where BOTH masks are present. SAM3 loses small "
-                             "fast objects for most of a take; this salvages the usable part")
+    parser.add_argument("--trim_to_tracked", action="store_true", default=True,
+                        help="Write <seq>_trim.0.color.mp4 + masks covering the longest run "
+                             "of frames where BOTH masks are present (DEFAULT ON). SAM3 loses "
+                             "small fast objects for most of a take; this salvages the usable "
+                             "part. --no_trim to skip")
+    parser.add_argument("--no_trim", dest="trim_to_tracked", action="store_false",
+                        help="Do not write a trimmed sequence")
     parser.add_argument("--trim_gap_tolerance", type=int, default=0,
-                        help="Bridge dropouts of up to N frames when finding runs (default 0). "
+                        help="Bridge dropouts of up to N frames when finding runs (default 0, "
+                             "i.e. strictly-tracked frames only). "
                              "Bridged frames keep their empty masks, so this trades mask "
-                             "coverage for clip length")
+                             "coverage for clip length. Measured on a basketball take: 0 -> "
+                             "3.4s clip, 5 -> 5.0s at 96.7%% covered, 10 -> 10.0s at 90.3%%. "
+                             "0 for strictly-tracked-only")
     parser.add_argument("--trim_min_person_px", type=int, default=1,
                         help="Min human mask area to count as tracked (default 1)")
     parser.add_argument("--trim_min_object_px", type=int, default=1,
@@ -542,26 +557,38 @@ def main():
     # Trimmed sequence
     if args.trim_to_tracked:
         if not runs:
-            # Fail loudly: silently skipping would look like the trim succeeded.
-            print("ERROR: --trim_to_tracked requested but no frame has both masks; "
-                  "nothing to trim.", file=sys.stderr)
-            sys.exit(1)
-        if args.trim_rank > len(runs):
+            # Loud, but NOT fatal: the masks generated fine and are already saved.
+            # Trimming is on by default, so exiting non-zero here would fail a
+            # perfectly good mask run just because this take has no usable stretch.
+            # Say so unmissably instead -- no trim written is the correct outcome,
+            # and it must not be mistaken for one that succeeded.
+            print("\n" + "!" * 72, file=sys.stderr)
+            print("NO TRIM WRITTEN: the human and the object are never tracked in the "
+                  "same frame.", file=sys.stderr)
+            print("The masks above are still valid. This take has no usable stretch -- "
+                  "check the", file=sys.stderr)
+            print("visualization, then retry with different prompts or a larger "
+                  "--trim_gap_tolerance.", file=sys.stderr)
+            print("!" * 72 + "\n", file=sys.stderr)
+        elif args.trim_rank > len(runs):
+            # Explicitly asked for a run that does not exist -- that IS a user
+            # error, unlike the no-runs case above, so fail.
             print(f"ERROR: --trim_rank {args.trim_rank} but only {len(runs)} runs exist.",
                   file=sys.stderr)
             sys.exit(1)
-        lo, hi = runs[args.trim_rank - 1]
-        covered = float(good[lo:hi + 1].mean())
-        print(f"\nTrimming to run #{args.trim_rank}: frames {lo}-{hi} "
-              f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
-              f"both masks present in {100 * covered:.1f}% of them)")
-        save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
-                     args.video, args.output_dir, fps=fps,
-                     meta=dict(gap_tolerance=args.trim_gap_tolerance,
-                               min_person_px=args.trim_min_person_px,
-                               min_object_px=args.trim_min_object_px,
-                               rank=args.trim_rank,
-                               both_masks_fraction=round(covered, 4)))
+        else:
+            lo, hi = runs[args.trim_rank - 1]
+            covered = float(good[lo:hi + 1].mean())
+            print(f"\nTrimming to run #{args.trim_rank}: frames {lo}-{hi} "
+                  f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
+                  f"both masks present in {100 * covered:.1f}% of them)")
+            save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
+                         args.video, args.output_dir, fps=fps,
+                         meta=dict(gap_tolerance=args.trim_gap_tolerance,
+                                   min_person_px=args.trim_min_person_px,
+                                   min_object_px=args.trim_min_object_px,
+                                   rank=args.trim_rank,
+                                   both_masks_fraction=round(covered, 4)))
 
     print("Done!")
 
