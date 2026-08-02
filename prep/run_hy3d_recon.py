@@ -20,6 +20,7 @@ Usage:
 import argparse
 import os
 import os.path as osp
+import shutil
 import subprocess
 
 import cv2
@@ -29,6 +30,12 @@ from PIL import Image
 
 
 def parse_args():
+    """Parse the CLI arguments for the object-reconstruction pipeline.
+
+    The --skip_* flags exist so the expensive stages can be bypassed
+    independently: --skip_hy3d for a fast check that the video, mask and crop
+    are sane, --skip_glb2obj to stop at the GLB when Blender is unavailable.
+    """
     parser = argparse.ArgumentParser(description="Extract RGBA, run Hunyuan3D, convert GLB to OBJ")
     parser.add_argument("--video", required=True, help="Path to input video, e.g. <seq>.0.color.mp4")
     parser.add_argument("--masks_root", required=True, help="Directory containing HDF5 mask files")
@@ -174,28 +181,74 @@ def run_hunyuan3d(rgba_img, outdir, glb_name, seed=600):
 
 
 def run_glb2obj(glb_path, outdir, obj_name, blender_path):
-    """Convert GLB to OBJ using Blender, then rename to the expected align.obj name."""
+    """Convert GLB to OBJ with Blender and flatten the result into outdir.
+
+    glb2obj.py writes a subdirectory <outdir>/<glb_basename>/ holding the .obj,
+    its .mtl and the copied texture images. All of it has to move up into
+    <outdir> together: fp_hy3d_track.py globs for <seq>*/*_align.obj exactly one
+    level down, and the .obj references its .mtl by bare filename, so moving the
+    .obj alone would leave a dangling mtllib line and cost the texture that
+    FoundationPose renders with.
+
+    Only the .obj is renamed to obj_name; the .mtl keeps its original name so
+    the mtllib reference inside the .obj stays valid after the move.
+
+    Args:
+        glb_path: the .glb Blender should convert.
+        outdir: destination directory, also where the .glb already lives.
+        obj_name: final basename, e.g. '<seq>_000_align.obj'.
+        blender_path: Blender executable.
+
+    Raises:
+        subprocess.CalledProcessError: if Blender exits non-zero.
+        RuntimeError: if Blender succeeds but writes no OBJ.
+    """
     script_path = osp.join(osp.dirname(osp.abspath(__file__)), 'glb2obj.py')
     glb_dir = osp.dirname(glb_path)
     cmd = [blender_path, '-b', '-P', script_path, '--', glb_dir, outdir]
     print(f'Running: {" ".join(cmd)}')
     subprocess.run(cmd, check=True)
 
-    # glb2obj.py produces <glb_basename>.obj via process_glb_file_with_decimation
     glb_basename = osp.splitext(osp.basename(glb_path))[0]
-    produced_obj = osp.join(outdir, glb_basename, f'{glb_basename}.obj')
+    produced_dir = osp.join(outdir, glb_basename)
+    produced_obj = osp.join(produced_dir, f'{glb_basename}.obj')
     target_obj = osp.join(outdir, obj_name)
 
-    if osp.isfile(produced_obj) and produced_obj != target_obj:
-        os.rename(produced_obj, target_obj)
-        print(f'Renamed {produced_obj} -> {target_obj}')
-    elif osp.isfile(target_obj):
+    if not osp.isdir(produced_dir) and osp.isfile(target_obj):
         print(f'OBJ already exists: {target_obj}')
-    else:
-        print(f'Warning: expected OBJ not found at {produced_obj}')
+        return
+
+    if not osp.isfile(produced_obj):
+        raise RuntimeError(
+            f'Blender exited 0 but wrote no OBJ at {produced_obj}. '
+            f'Check the [glb2obj] lines above for the real failure.')
+
+    # Move the .obj plus every sidecar (.mtl, textures) up one level.
+    for fname in sorted(os.listdir(produced_dir)):
+        src = osp.join(produced_dir, fname)
+        dst = target_obj if fname == f'{glb_basename}.obj' else osp.join(outdir, fname)
+        if osp.abspath(src) == osp.abspath(dst):
+            continue
+        if osp.isdir(dst):
+            shutil.rmtree(dst)
+        elif osp.isfile(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+        print(f'  {fname} -> {osp.relpath(dst, outdir)}')
+
+    if not os.listdir(produced_dir):
+        os.rmdir(produced_dir)
+    print(f'Flattened Blender output into {outdir}')
 
 
 def main():
+    """Run the six reconstruction steps for one video frame.
+
+    Extracts the frame, loads its object mask, writes the cropped RGBA, runs
+    Hunyuan3D shape and texture generation, then converts the GLB to the
+    <seq>_<frame:03d>_align.obj that fp_hy3d_track.py expects. Returns early if
+    that OBJ already exists, so re-running is cheap.
+    """
     args = parse_args()
 
     seq_name = extract_seq_name(args.video)
