@@ -23,6 +23,10 @@ Scored per frame:
     solidity    object area / convex hull area. An unoccluded convex object is
                 near 1.0; something biting into it creates concavities. Catches
                 occluders that are not the person, which `contact` misses.
+    centrality  how close the object is to the image centre. Only folded into the
+                score under --prefer_center, for wide-angle and fisheye sources
+                like Aria: distortion grows toward the edges and Hunyuan3D bakes
+                whatever it is shown into the mesh as real geometry.
     border      whether the object touches the frame edge -- clipped is unusable.
     sharpness   Laplacian variance inside the object box, needing --check_sharpness
                 since it decodes video. Matters because an airborne, unoccluded
@@ -69,6 +73,11 @@ def parse_args():
                              "person contact (default: 5)")
     parser.add_argument("--min_area", type=int, default=1,
                         help="ignore frames whose object mask is smaller (default: 1)")
+    parser.add_argument("--prefer_center", action="store_true",
+                        help="bias toward frames with the object near the image centre. "
+                             "Use for wide-angle/fisheye sources such as Aria, where lens "
+                             "distortion grows toward the edges and would be baked into "
+                             "the reconstructed mesh as wrong geometry.")
     parser.add_argument("--check_sharpness", action="store_true",
                         help="also measure focus inside the object box; decodes the "
                              "video, so it is slower")
@@ -197,6 +206,30 @@ def person_contact(obj_mask, person_mask, dilate):
     return float((ring & person_mask).sum() / ring.sum())
 
 
+def centrality(mask):
+    """How close the object sits to the image centre, as 1.0 at centre, 0.0 at edge.
+
+    Matters for wide-angle and fisheye cameras -- an Aria RGB stream, say. Lens
+    distortion grows with radius from the optical centre, so an object near the
+    edge is genuinely stretched in the image. Hunyuan3D reconstructs whatever
+    shape it is shown, so that distortion is inherited by the mesh as real,
+    wrong geometry. Choosing a frame where the object sits near the centre
+    avoids the problem rather than correcting it.
+
+    The radius is normalised by half the smaller image dimension, so 1.0 is the
+    edge of the largest inscribed circle.
+
+    Returns:
+        Centrality in [0, 1].
+    """
+    H, W = mask.shape[:2]
+    ys, xs = np.where(mask)
+    cx = (float(xs.min()) + float(xs.max())) / 2.0
+    cy = (float(ys.min()) + float(ys.max())) / 2.0
+    radius = math.hypot(cx - W / 2.0, cy - H / 2.0)
+    return float(max(0.0, 1.0 - radius / (min(H, W) / 2.0)))
+
+
 def touches_border(mask, pad=2):
     """Whether the mask reaches within pad pixels of any frame edge."""
     return bool(mask[:pad].any() or mask[-pad:].any()
@@ -257,12 +290,13 @@ def score_frames(objects, persons, dilate, min_area):
             "contact": person_contact(obj, persons.get(idx), dilate),
             "solidity": solidity(obj),
             "circle_fill": enclosing_circle_fill(obj),
+            "centrality": centrality(obj),
             "border": touches_border(obj),
         })
     return records
 
 
-def combine_scores(records, sharpness=None):
+def combine_scores(records, sharpness=None, prefer_center=False):
     """Fold the measurements into one comparable score per frame.
 
     Everything is normalised against the best frame in this sequence, so scores
@@ -301,11 +335,16 @@ def combine_scores(records, sharpness=None):
         sharp_factor = 1.0
         if max_sharp:
             sharp_factor = 0.5 + 0.5 * (r["sharpness"] or 0.0) / max_sharp
+        # Bias toward the centre rather than disqualifying the edges: a frame
+        # near the rim is distorted, not useless, and may still be the only one
+        # where the object is unoccluded.
+        centre_factor = 0.5 + 0.5 * r["centrality"] if prefer_center else 1.0
         r["score"] = (r["area_norm"]
                       * (1.0 - r["contact"])
                       * r["completeness"]
                       * (0.0 if r["border"] else 1.0)
-                      * sharp_factor)
+                      * sharp_factor
+                      * centre_factor)
 
 
 def print_table(records, top, with_sharpness):
@@ -316,7 +355,7 @@ def print_table(records, top, with_sharpness):
     at the previews is the real judge.
     """
     header = (f"{'frame':>6} {'score':>7} {'area':>7} {'area%':>6} {'contact':>8} "
-              f"{'solid':>6} {'circle':>7} {'compl':>6} {'border':>7}")
+              f"{'solid':>6} {'circle':>7} {'compl':>6} {'centre':>7} {'border':>7}")
     if with_sharpness:
         header += f" {'sharp':>8}"
     print(header)
@@ -325,7 +364,8 @@ def print_table(records, top, with_sharpness):
         line = (f"{r['frame']:>6} {r['score']:>7.3f} {r['area']:>7} "
                 f"{100 * r['area_norm']:>5.0f}% {r['contact']:>8.2f} "
                 f"{r['solidity']:>6.2f} {r['circle_fill']:>7.2f} "
-                f"{r['completeness']:>6.2f} {str(r['border']):>7}")
+                f"{r['completeness']:>6.2f} {r['centrality']:>7.2f} "
+                f"{str(r['border']):>7}")
         if with_sharpness:
             line += f" {r['sharpness'] or 0.0:>8.1f}"
         print(line)
@@ -424,7 +464,7 @@ def main():
             args.video, [r["frame"] for r in records],
             {r["frame"]: objects[r["frame"]] for r in records})
 
-    combine_scores(records, sharpness)
+    combine_scores(records, sharpness, prefer_center=args.prefer_center)
     records.sort(key=lambda r: -r["score"])
 
     print()
