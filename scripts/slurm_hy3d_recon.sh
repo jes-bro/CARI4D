@@ -36,9 +36,22 @@ shift $(( $# > 2 ? 2 : $# ))
 EXTRA_ARGS=("$@")   # e.g. --skip_hy3d for a fast smoke test
 
 REPO=/simurgh2/projects/ret-hoi/CARI4D
-MASKS_ROOT=$REPO/data/cari4d-demo/wild/masks
 HY3D_ROOT=$REPO/data/cari4d-demo/meshes
 CACHE_ROOT=/simurgh2/projects/ret-hoi
+
+# run_sam3_masks.py writes its trimmed clip to <masks_root>/trimmed_vids/, so a
+# video sitting in a trimmed_vids/ directory tells us its own masks_root. That
+# makes `sbatch ... <clip>` work for any sequence with no path editing -- which
+# matters because the trimmed clip is the ONLY video whose frame indices line up
+# with the trimmed masks. An explicit MASKS_ROOT in the environment still wins.
+VIDEO_DIR=$(dirname "$VIDEO")
+if [[ -n "${MASKS_ROOT:-}" ]]; then
+    :
+elif [[ $(basename "$VIDEO_DIR") == "trimmed_vids" ]]; then
+    MASKS_ROOT=$(dirname "$VIDEO_DIR")
+else
+    MASKS_ROOT=$REPO/data/cari4d-demo/wild/masks
+fi
 
 log() { echo "[hy3d $(date -u +%H:%M:%S)] $*"; }
 
@@ -75,6 +88,11 @@ fi
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none}"
 log "video=$VIDEO frame=$FRAME_INDEX extra=${EXTRA_ARGS[*]:-none}"
+log "masks_root=$MASKS_ROOT"
+if [[ ! -f $VIDEO ]]; then
+    echo "ERROR: no such video: $VIDEO" >&2
+    exit 1
+fi
 log "blender=$BLENDER"
 log "mem=${SLURM_MEM_PER_NODE:-?}MB cpus=${SLURM_CPUS_PER_TASK:-?} timelimit=${SBATCH_TIMELIMIT:-see header}"
 free -g | head -2
