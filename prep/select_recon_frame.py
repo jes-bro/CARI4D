@@ -48,7 +48,7 @@ import numpy as np
 
 sys.path.append(os.getcwd())
 
-from prep.run_hy3d_recon import crop_rgba, extract_seq_name
+from prep.run_hy3d_recon import crop_rgba, extract_frame, extract_seq_name
 
 
 def parse_args():
@@ -78,6 +78,15 @@ def parse_args():
                         help="crop margin for previews (default: 0.2)")
     parser.add_argument("--crop_size", type=int, default=512,
                         help="preview crop size (default: 512)")
+    parser.add_argument("--hires_video", default=None,
+                        help="render previews from this higher-resolution copy of the "
+                             "take, matching what run_hy3d_recon --hires_video would "
+                             "feed Hunyuan3D. Without it previews come from --video and "
+                             "understate the crop the reconstruction actually sees.")
+    parser.add_argument("--hires_frame_offset", type=int, default=0,
+                        help="frame in --hires_video corresponding to frame 0 of "
+                             "--video; the trim start 'lo' from run_sam3_masks.py "
+                             "(default: 0)")
     return parser.parse_args()
 
 
@@ -322,35 +331,74 @@ def print_table(records, top, with_sharpness):
         print(line)
 
 
-def write_previews(video_path, records, objects, out_dir, top, margin, crop_size):
-    """Write the RGBA crop for the top-ranked frames.
+def _save_preview(rgb, mask_bool, record, rank, out_dir, margin, crop_size):
+    """Crop one frame and write it, returning True if it was written.
 
     Uses run_hy3d_recon's crop_rgba so the preview is exactly what Hunyuan3D
-    would receive, not an approximation of it.
+    would receive rather than an approximation. A frame whose mask cannot be
+    cropped is reported and skipped, since one bad frame should not abandon the
+    rest of the batch.
+    """
+    mask = mask_bool.astype(np.uint8) * 255
+    if mask.shape[:2] != rgb.shape[:2]:
+        H, W = rgb.shape[:2]
+        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
+    try:
+        rgba = crop_rgba(rgb, mask, margin=margin, crop_size=crop_size)
+    except ValueError as exc:
+        print(f"  frame {record['frame']}: {exc}")
+        return False
+    path = osp.join(out_dir, f"rank{rank:02d}_frame{record['frame']:06d}.png")
+    rgba.save(path)
+    print(f"  wrote {path}")
+    return True
+
+
+def write_previews(video_path, records, objects, out_dir, top, margin, crop_size,
+                   hires_video=None, hires_frame_offset=0):
+    """Write RGBA crops for the top-ranked frames.
+
+    With hires_video the frames come from a higher-resolution copy of the take
+    and the mask is upscaled to match, mirroring run_hy3d_recon --hires_video.
+    That matters for judging: a preview built from the low-resolution clip
+    understates the crop the reconstruction would actually get, which can make a
+    perfectly usable frame look hopeless.
+
+    The low-resolution path decodes sequentially because it walks most of the
+    clip; the hi-res path seeks, since it only wants a handful of frames out of
+    a much larger file.
     """
     os.makedirs(out_dir, exist_ok=True)
-    wanted = {r["frame"]: r for r in records[:top]}
-    cap = cv2.VideoCapture(video_path)
-    idx, written = 0, 0
-    while wanted and idx <= max(wanted):
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if idx in wanted:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mask = objects[idx].astype(np.uint8) * 255
+    selected = records[:top]
+    written = 0
+
+    if hires_video:
+        print(f"Previewing from {hires_video} (offset {hires_frame_offset})")
+        for rank, record in enumerate(selected, start=1):
+            idx = record["frame"]
             try:
-                rgba = crop_rgba(rgb, mask, margin=margin, crop_size=crop_size)
-                rank = records.index(wanted[idx]) + 1
-                path = osp.join(out_dir, f"rank{rank:02d}_frame{idx:06d}.png")
-                rgba.save(path)
-                print(f"  wrote {path}")
-                written += 1
-            except ValueError as exc:
+                rgb = extract_frame(hires_video, idx + hires_frame_offset)
+            except RuntimeError as exc:
                 print(f"  frame {idx}: {exc}")
-            del wanted[idx]
-        idx += 1
-    cap.release()
+                continue
+            written += _save_preview(rgb, objects[idx], record, rank, out_dir,
+                                     margin, crop_size)
+    else:
+        wanted = {r["frame"]: rank for rank, r in enumerate(selected, start=1)}
+        by_frame = {r["frame"]: r for r in selected}
+        cap = cv2.VideoCapture(video_path)
+        idx = 0
+        while wanted and idx <= max(wanted):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if idx in wanted:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                written += _save_preview(rgb, objects[idx], by_frame[idx],
+                                         wanted.pop(idx), out_dir, margin, crop_size)
+            idx += 1
+        cap.release()
+
     print(f"Wrote {written} preview(s) to {out_dir}")
 
 
@@ -391,7 +439,9 @@ def main():
     if args.preview_dir:
         print()
         write_previews(args.video, records, objects, args.preview_dir,
-                       args.top, args.margin, args.crop_size)
+                       args.top, args.margin, args.crop_size,
+                       hires_video=args.hires_video,
+                       hires_frame_offset=args.hires_frame_offset)
     return 0
 
 
