@@ -140,13 +140,101 @@ def resolve_spec(args):
     return spec
 
 
+def split_uv_seam(vertices, faces, uv):
+    """Duplicate vertices spanning the u wrap so faces interpolate locally.
+
+    u is derived from atan2, so it jumps from ~1.0 back to ~0.0 on one meridian.
+    A triangle straddling that jump interpolates the long way round and smears
+    the whole texture across itself, which renders as a jagged band down the
+    sphere. The standard fix is to give those faces their own copies of the
+    low-u vertices with u + 1, so interpolation stays local. The texture is
+    equirectangular and tiles horizontally, so u > 1 samples correctly.
+
+    This matters beyond looks: FoundationPose matches rendered appearance
+    against the video, so a smeared band is corrupted evidence.
+
+    Args:
+        vertices: (V, 3) positions.
+        faces: (F, 3) vertex indices.
+        uv: (V, 2) texture coordinates.
+
+    Returns:
+        (vertices, faces, uv) with the seam split.
+    """
+    vertices = [v for v in vertices]
+    uv = [c for c in uv]
+    faces = faces.copy()
+    duplicates = {}
+
+    for face_index, face in enumerate(faces):
+        us = [uv[i][0] for i in face]
+        if max(us) - min(us) <= 0.5:
+            continue
+        for corner, vertex_index in enumerate(face):
+            if uv[vertex_index][0] >= 0.5:
+                continue
+            if vertex_index not in duplicates:
+                duplicates[vertex_index] = len(vertices)
+                vertices.append(vertices[vertex_index])
+                uv.append(np.array([uv[vertex_index][0] + 1.0, uv[vertex_index][1]]))
+            faces[face_index][corner] = duplicates[vertex_index]
+
+    if duplicates:
+        print(f"  split {len(duplicates)} seam vertex/vertices to avoid UV wrap")
+    return np.array(vertices), faces, np.array(uv)
+
+
+def fix_pole_uv(vertices, faces, uv, eps=1e-6):
+    """Give each pole vertex a per-face u, since one value cannot serve them all.
+
+    At a pole the direction is (0, +-1, 0), so atan2(z, x) is atan2(0, 0) = 0 and
+    u collapses to 0.5 regardless of which meridian the face actually occupies.
+    Neighbouring vertices sit at their own meridians, so the face spans most of
+    the texture and smears it -- the same corruption as the wrap seam, from a
+    different cause.
+
+    The fix is the same shape: duplicate the pole per face and set its u to the
+    mean of the other two corners, placing it on their meridian. Must run after
+    split_uv_seam so those values are already unwrapped.
+
+    Args:
+        vertices: (V, 3) positions.
+        faces: (F, 3) vertex indices.
+        uv: (V, 2) texture coordinates.
+        eps: tolerance for treating a vertex as exactly polar.
+
+    Returns:
+        (vertices, faces, uv) with pole vertices split per face.
+    """
+    vertices = [v for v in vertices]
+    uv = [c for c in uv]
+    faces = faces.copy()
+    polar = [math.sqrt(max(0.0, 1.0 - float(v[1]) ** 2)) < eps for v in vertices]
+    fixed = 0
+
+    for face_index, face in enumerate(faces):
+        for corner, vertex_index in enumerate(face):
+            if not polar[vertex_index]:
+                continue
+            others = [uv[j][0] for k, j in enumerate(face) if k != corner]
+            new_index = len(vertices)
+            vertices.append(vertices[vertex_index])
+            uv.append(np.array([float(np.mean(others)), uv[vertex_index][1]]))
+            polar.append(True)
+            faces[face_index][corner] = new_index
+            fixed += 1
+
+    if fixed:
+        print(f"  gave {fixed} pole corner(s) a per-face u")
+    return np.array(vertices), faces, np.array(uv)
+
+
 def sphere_uv(vertices):
     """Compute an equirectangular UV per vertex from its direction.
 
-    u wraps around the Y axis, v runs pole to pole. Faces spanning the u=0/1
-    seam interpolate the long way round and show a visible band there; that is
-    inherent to per-vertex UVs on a closed sphere without duplicating the seam
-    vertices, and it does not affect geometry or pose tracking.
+    u wraps around the Y axis, v runs pole to pole. The u=0/1 discontinuity this
+    creates is repaired by split_uv_seam; without that, faces crossing the wrap
+    smear the whole texture across themselves.
     """
     directions = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
     x, y, z = directions[:, 0], directions[:, 1], directions[:, 2]
@@ -282,8 +370,14 @@ def build_mesh(subdivisions):
     """
     import trimesh
 
-    mesh = trimesh.creation.icosphere(subdivisions=subdivisions, radius=1.0)
-    mesh.visual = trimesh.visual.TextureVisuals(uv=sphere_uv(mesh.vertices))
+    sphere = trimesh.creation.icosphere(subdivisions=subdivisions, radius=1.0)
+    vertices, faces, uv = split_uv_seam(
+        np.asarray(sphere.vertices), np.asarray(sphere.faces), sphere_uv(sphere.vertices))
+    vertices, faces, uv = fix_pole_uv(vertices, faces, uv)
+    # process=False keeps the duplicated seam vertices; trimesh would otherwise
+    # merge them back by position and undo the split.
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
     return mesh
 
 
