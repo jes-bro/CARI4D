@@ -54,6 +54,16 @@ def parse_args():
                         help="Skip Hunyuan3D inference, only do RGBA extraction")
     parser.add_argument("--skip_glb2obj", action="store_true",
                         help="Skip GLB to OBJ conversion")
+    parser.add_argument("--hires_video", default=None,
+                        help="Take the reconstruction frame from this higher-resolution "
+                             "copy of the same take, upscaling the mask to match. Only "
+                             "this one frame needs resolution, so the masks can stay at "
+                             "whatever resolution SAM3 ran at.")
+    parser.add_argument("--hires_frame_offset", type=int, default=0,
+                        help="Frame index in --hires_video corresponding to frame 0 of "
+                             "--video. Set this to the trim start 'lo' reported by "
+                             "run_sam3_masks.py when --video is a trimmed clip and "
+                             "--hires_video is the untrimmed original (default: 0)")
     return parser.parse_args()
 
 
@@ -88,6 +98,55 @@ def load_object_mask(masks_root, seq_name, frame_index, kid):
             raise KeyError(f"Mask key '{key}' not found in {h5_path}")
         mask = f[key][:].astype(np.uint8) * 255
     return mask
+
+
+def load_hires_frame_and_mask(hires_video, masks_root, seq_name, frame_index,
+                              frame_offset, kid):
+    """Read the reconstruction frame at full resolution, with the mask upscaled.
+
+    Only the single reconstruction frame benefits from resolution -- everything
+    downstream is derived from the RGBA crop -- so running SAM3 over the whole
+    take at full resolution to serve one frame is wasted GPU time. This reads
+    that frame from a larger copy of the same take and resamples the existing
+    mask up to match.
+
+    The mask is upscaled with linear interpolation rather than nearest, which
+    leaves a soft edge. That is deliberate: crop_rgba thresholds at >127 to find
+    the bounding box but keeps the raw values as alpha, so a soft edge gives
+    Hunyuan3D an antialiased silhouette instead of the staircase a 4-5x nearest
+    upscale would produce.
+
+    Args:
+        hires_video: higher-resolution copy of the same take.
+        masks_root: directory holding <seq>_masks_k<kid>.h5.
+        seq_name: sequence name.
+        frame_index: frame index in the low-resolution/trimmed sequence.
+        frame_offset: index in hires_video corresponding to frame 0 of the
+            low-resolution sequence. Non-zero when --video is a trimmed clip and
+            hires_video is the untrimmed original.
+        kid: camera/kinect id.
+
+    Returns:
+        (rgb, mask) at the high-resolution frame's dimensions.
+    """
+    hires_index = frame_index + frame_offset
+    print(f'Extracting frame {hires_index} from {hires_video} '
+          f'(frame {frame_index} + offset {frame_offset})')
+    rgb = extract_frame(hires_video, hires_index)
+
+    print(f'Loading object mask from {masks_root}')
+    mask = load_object_mask(masks_root, seq_name, frame_index, kid)
+
+    H, W = rgb.shape[:2]
+    if mask.shape[:2] != (H, W):
+        mh, mw = mask.shape[:2]
+        print(f'Upscaling mask {mw}x{mh} -> {W}x{H} '
+              f'({W / float(mw):.2f}x) to match the hi-res frame')
+        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
+    else:
+        print('Mask already matches the hi-res frame, no upscaling needed')
+
+    return rgb, mask
 
 
 def crop_rgba(rgb, mask, margin=0.2, crop_size=512):
@@ -349,13 +408,19 @@ def main():
         print(f'Output already exists: {obj_path}, skipping.')
         return
 
-    # Step 1: Extract RGB frame
-    print(f'Extracting frame {frame_idx} from {args.video}')
-    rgb = extract_frame(args.video, frame_idx)
-
-    # Step 2: Load object mask
-    print(f'Loading object mask from {args.masks_root}')
-    mask = load_object_mask(args.masks_root, seq_name, frame_idx, args.kid)
+    # Step 1-2: Extract the RGB frame and its object mask. Only this one frame
+    # needs resolution -- everything downstream works off the RGBA crop -- so
+    # --hires_video lets it come from a larger copy of the same take while the
+    # masks stay at whatever resolution SAM3 ran at.
+    if args.hires_video:
+        rgb, mask = load_hires_frame_and_mask(
+            args.hires_video, args.masks_root, seq_name, frame_idx,
+            args.hires_frame_offset, args.kid)
+    else:
+        print(f'Extracting frame {frame_idx} from {args.video}')
+        rgb = extract_frame(args.video, frame_idx)
+        print(f'Loading object mask from {args.masks_root}')
+        mask = load_object_mask(args.masks_root, seq_name, frame_idx, args.kid)
 
     # Step 3-4: Apply mask, crop, save RGBA
     rgba_img = crop_rgba(rgb, mask, margin=args.margin, crop_size=args.crop_size)
