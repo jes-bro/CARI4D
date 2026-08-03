@@ -241,6 +241,85 @@ def run_glb2obj(glb_path, outdir, obj_name, blender_path):
     print(f'Flattened Blender output into {outdir}')
 
 
+def find_glb_texture(glb_path):
+    """Return the baked texture image from a GLB, or None if it has none.
+
+    trimesh exposes the image as ``material.image`` for a SimpleMaterial and
+    ``material.baseColorTexture`` for a PBRMaterial; Hunyuan3D writes the
+    latter, but both are checked so this does not depend on which loader path
+    trimesh takes.
+
+    Args:
+        glb_path: the .glb written by Hunyuan3D.
+
+    Returns:
+        A PIL image, or None when the GLB carries no texture.
+    """
+    import trimesh
+
+    mesh = trimesh.load(glb_path, force='mesh')
+    material = getattr(mesh.visual, 'material', None)
+    if material is None:
+        return None
+    return getattr(material, 'image', None) or getattr(material, 'baseColorTexture', None)
+
+
+def attach_glb_texture(glb_path, outdir, obj_name):
+    """Extract the GLB's texture and point the converted OBJ's .mtl at it.
+
+    Blender's OBJ exporter drops the GLB's packed image even with
+    path_mode='COPY', leaving a .mtl with no map_Kd and a mesh that renders
+    flat grey. The UVs survive both the decimation and the export, and the
+    texture image is unchanged by either, so re-attaching the original image
+    is enough -- no re-conversion, and the decimated geometry is kept.
+
+    This matters because FoundationPose does render-and-compare against the
+    video frames; an untextured mesh weakens tracking on objects whose shape
+    alone is ambiguous.
+
+    Args:
+        glb_path: the .glb Hunyuan3D produced.
+        outdir: directory holding the flattened .obj and .mtl.
+        obj_name: the final OBJ basename, used to name the texture file.
+
+    Returns:
+        Path to the written texture, or None if there was nothing to attach.
+    """
+    image = find_glb_texture(glb_path)
+    if image is None:
+        print('No texture found in the GLB, leaving the .mtl unchanged.')
+        return None
+
+    mtl_files = sorted(f for f in os.listdir(outdir) if f.endswith('.mtl'))
+    if not mtl_files:
+        print(f'No .mtl in {outdir}, cannot attach the texture.')
+        return None
+    if len(mtl_files) > 1:
+        print(f'Several .mtl files in {outdir} ({mtl_files}); using {mtl_files[0]}.')
+    mtl_path = osp.join(outdir, mtl_files[0])
+
+    with open(mtl_path) as f:
+        mtl = f.read()
+    if 'map_Kd' in mtl:
+        print(f'{mtl_files[0]} already references a texture, leaving it alone.')
+        return None
+
+    tex_name = f"{osp.splitext(obj_name)[0]}_texture.png"
+    tex_path = osp.join(outdir, tex_name)
+    image.save(tex_path)
+    print(f'Saved texture: {tex_path} ({image.size[0]}x{image.size[1]})')
+
+    # map_Kd binds to the material block it follows. These meshes carry a
+    # single newmtl, so appending is correct; with several the texture would
+    # attach only to the last, hence the warning above.
+    if mtl and not mtl.endswith('\n'):
+        mtl += '\n'
+    with open(mtl_path, 'w') as f:
+        f.write(f'{mtl}map_Kd {tex_name}\n')
+    print(f'Added map_Kd {tex_name} to {mtl_files[0]}')
+    return tex_path
+
+
 def main():
     """Run the six reconstruction steps for one video frame.
 
@@ -296,6 +375,9 @@ def main():
 
     # Step 6: Convert GLB to OBJ
     run_glb2obj(glb_path, outdir, obj_name, args.blender_path)
+
+    # Step 7: Re-attach the texture Blender dropped on export.
+    attach_glb_texture(glb_path, outdir, obj_name)
 
     print(f'Done. Output: {obj_path}')
 
