@@ -17,7 +17,12 @@ is made from the data rather than by guessing. It never requires a clean frame
 to exist; it ranks what is there and lets the best available win.
 
 Scored per frame:
-    area        object mask pixels. More pixels, more detail to reconstruct from.
+    extent      longest bounding-box side, saturating at --size_target_px. Linear
+                resolution is what limits reconstruction, and past the crop size
+                extra pixels are not extra information. Saturating matters: with
+                a proportional area term, a mask leaking into a neighbour scores
+                ABOVE a clean tight one, because leakage adds area quadratically
+                while costing only a little shape score.
     contact     fraction of the object's dilated boundary overlapping the person
                 mask. High means a hand is on it.
     solidity    object area / convex hull area. An unoccluded convex object is
@@ -73,6 +78,12 @@ def parse_args():
                              "person contact (default: 5)")
     parser.add_argument("--min_area", type=int, default=1,
                         help="ignore frames whose object mask is smaller (default: 1)")
+    parser.add_argument("--size_target_px", type=int, default=256,
+                        help="object bounding-box size, in pixels, at which size stops "
+                             "improving the score (default: 256). Beyond this the object "
+                             "already fills the 512px crop, so extra pixels are not extra "
+                             "information -- and rewarding them would rank leaked, "
+                             "over-segmented masks above clean ones.")
     parser.add_argument("--prefer_center", action="store_true",
                         help="bias toward frames with the object near the image centre. "
                              "Use for wide-angle/fisheye sources such as Aria, where lens "
@@ -206,6 +217,21 @@ def person_contact(obj_mask, person_mask, dilate):
     return float((ring & person_mask).sum() / ring.sum())
 
 
+def object_extent(mask):
+    """Longest side of the object's bounding box, in pixels.
+
+    Used instead of raw area because what limits reconstruction is linear
+    resolution -- how many pixels span the object -- not pixel count. It is also
+    far less sensitive to a mask leaking into a neighbour, which inflates area
+    quadratically but the bounding box only linearly.
+
+    Returns:
+        Longest bounding-box side in pixels.
+    """
+    ys, xs = np.where(mask)
+    return max(int(ys.max() - ys.min()), int(xs.max() - xs.min())) + 1
+
+
 def centrality(mask):
     """How close the object sits to the image centre, as 1.0 at centre, 0.0 at edge.
 
@@ -287,6 +313,7 @@ def score_frames(objects, persons, dilate, min_area):
         records.append({
             "frame": idx,
             "area": area,
+            "extent": object_extent(obj),
             "contact": person_contact(obj, persons.get(idx), dilate),
             "solidity": solidity(obj),
             "circle_fill": enclosing_circle_fill(obj),
@@ -296,7 +323,7 @@ def score_frames(objects, persons, dilate, min_area):
     return records
 
 
-def combine_scores(records, sharpness=None, prefer_center=False):
+def combine_scores(records, sharpness=None, prefer_center=False, size_target_px=256):
     """Fold the measurements into one comparable score per frame.
 
     Everything is normalised against the best frame in this sequence, so scores
@@ -322,12 +349,19 @@ def combine_scores(records, sharpness=None, prefer_center=False):
     """
     if not records:
         return
-    max_area = max(r["area"] for r in records)
     max_solidity = max(r["solidity"] for r in records) or 1.0
     max_circle = max(r["circle_fill"] for r in records) or 1.0
     max_sharp = max(sharpness.values()) if sharpness else None
     for r in records:
-        r["area_norm"] = r["area"] / max_area
+        # Saturating, not proportional. Past size_target_px the object already
+        # fills the 512x512 crop without upscaling, so more pixels are not more
+        # information -- while a mask leaking into a neighbour keeps inflating
+        # area. Rewarding area linearly therefore ranks over-segmented masks
+        # above clean ones, which is exactly what happened on the Aria basketball
+        # (frame 1117 at 246k px beat 1116 at 169k despite a teardrop silhouette).
+        # Saturating lets shape, focus and centrality decide among every frame
+        # that is already big enough.
+        r["size_norm"] = min(1.0, r["extent"] / float(size_target_px))
         r["solidity_norm"] = min(1.0, r["solidity"] / max_solidity)
         r["circle_norm"] = min(1.0, r["circle_fill"] / max_circle)
         r["completeness"] = min(r["solidity_norm"], r["circle_norm"])
@@ -339,7 +373,7 @@ def combine_scores(records, sharpness=None, prefer_center=False):
         # near the rim is distorted, not useless, and may still be the only one
         # where the object is unoccluded.
         centre_factor = 0.5 + 0.5 * r["centrality"] if prefer_center else 1.0
-        r["score"] = (r["area_norm"]
+        r["score"] = (r["size_norm"]
                       * (1.0 - r["contact"])
                       * r["completeness"]
                       * (0.0 if r["border"] else 1.0)
@@ -354,15 +388,15 @@ def print_table(records, top, with_sharpness):
     overridden knowingly -- the weighting is a heuristic, and the person looking
     at the previews is the real judge.
     """
-    header = (f"{'frame':>6} {'score':>7} {'area':>7} {'area%':>6} {'contact':>8} "
+    header = (f"{'frame':>6} {'score':>7} {'extent':>7} {'size%':>6} {'contact':>8} "
               f"{'solid':>6} {'circle':>7} {'compl':>6} {'centre':>7} {'border':>7}")
     if with_sharpness:
         header += f" {'sharp':>8}"
     print(header)
     print("-" * len(header))
     for r in records[:top]:
-        line = (f"{r['frame']:>6} {r['score']:>7.3f} {r['area']:>7} "
-                f"{100 * r['area_norm']:>5.0f}% {r['contact']:>8.2f} "
+        line = (f"{r['frame']:>6} {r['score']:>7.3f} {r['extent']:>7} "
+                f"{100 * r['size_norm']:>5.0f}% {r['contact']:>8.2f} "
                 f"{r['solidity']:>6.2f} {r['circle_fill']:>7.2f} "
                 f"{r['completeness']:>6.2f} {r['centrality']:>7.2f} "
                 f"{str(r['border']):>7}")
@@ -464,7 +498,8 @@ def main():
             args.video, [r["frame"] for r in records],
             {r["frame"]: objects[r["frame"]] for r in records})
 
-    combine_scores(records, sharpness, prefer_center=args.prefer_center)
+    combine_scores(records, sharpness, prefer_center=args.prefer_center,
+                   size_target_px=args.size_target_px)
     records.sort(key=lambda r: -r["score"])
 
     print()
@@ -472,7 +507,7 @@ def main():
     best = records[0]
     print()
     print(f"Best frame: {best['frame']}  "
-          f"(area {best['area']} px, contact {best['contact']:.2f}, "
+          f"({best['extent']} px across, contact {best['contact']:.2f}, "
           f"completeness {best['completeness']:.2f})")
     print(f"Use it with: --frame_index {best['frame']}")
 
