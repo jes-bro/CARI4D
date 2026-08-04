@@ -56,14 +56,21 @@ python prep/unidepth_behave.py --wild_video --video ${video} -o ${video_dir}
 # Step 2: run NLF
 python prep/run_nlf_sepK.py -o ${nlf_path} --masks_root ${masks_root} --video ${video} --wild_video
 
+# Steps 3 and 4 both need an explicit -o. Neither writes anything there --
+# fit_smplh_global derives its output from --nlf_path, align_monod2hum from the
+# packed file -- but both inherit BaseBehaveVideoData's parser, whose
+# -o/--outpath defaults to the original author's home
+# (/home/xianghuix/datasets/behave/fp, behave_video.py:229) and gets mkdir'd
+# during setup. Without this they die on PermissionError before doing any work.
+
 # Step 3: run SMPLH fitting to get globally consistent human pose and translation
 python prep/fit_smplh_global.py --wild_video --video ${video} --packed_root ${packed_root} --masks_root ${masks_root} \
-    --nlf_path=${nlf_path}
+    --nlf_path=${nlf_path} -o ${nlf_path}-opt
 
 # Step 4: align Unidepth to GENMO human
 python prep/align_monod2hum.py --wild_video --nlf_path ${nlf_path}-opt \
 --masks_root ${masks_root} \
---video ${video}
+--video ${video} -o ${nlf_path}-opt
 
 # Update the video path, pointing to the new video with aligned depth.
 video=${video_dir}-aligned/${video_prefix}.0.color.mp4
