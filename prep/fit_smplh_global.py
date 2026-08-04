@@ -51,7 +51,7 @@ class GlobalSMPLHOptimizer(BaseBehaveVideoData):
         nlf_transls = nlf_data['transls'][:, view_id] 
         nlf_gender = nlf_data['gender']
         nlf_poses = nlf_data['poses'][:, view_id]
-        nlf_betas = nlf_data['betas'][:, view_id] # (T, 10), compute an average
+        nlf_betas = nlf_data['betas'][:, view_id] # (T, B), compute an average
         nlf_betas = np.mean(nlf_betas, axis=0)[None].repeat(len(nlf_poses), axis=0) 
         # to torch tensors 
         smpl_global_pose = torch.from_numpy(nlf_poses[:, :3]).float().to(self.device).requires_grad_(True)
@@ -76,14 +76,25 @@ class GlobalSMPLHOptimizer(BaseBehaveVideoData):
 
         batch_size = min(256, len(smpl_global_pose))
         total_steps = 1000
+        # num_betas must match what NLF produced, not smplx's default of 10.
+        # The MANO SMPL+H models carry 16 shape components, and NLF checkpoints
+        # differ in how many they predict -- nlf_l_multi_0.3.2 gives 16. Left at
+        # the default, lbs fails inside blend_shapes with
+        #   einsum(): subscript l has size 10 ... does not broadcast with 16
+        # Deriving it from the data rather than hardcoding 16 keeps this working
+        # across NLF versions, and CARI4D's own SMPL layer already takes any
+        # beta count (lib_smpl/smpl_module.py slices shapedirs to num_betas).
+        num_betas = smpl_betas.shape[-1]
+        print(f'Using {num_betas} shape coefficients, from the NLF output')
         smplh_model = smplx.create(
             model_path=SMPL_MODEL_ROOT,
             model_type='smplh',
             gender=nlf_gender,
             use_pca=False,
+            num_betas=num_betas,
             batch_size=batch_size,
             flat_hand_mean=True # the given hands are directly in the axis angle format
-        ).to(self.device) 
+        ).to(self.device)
         assert len(joints_2d) == len(smpl_global_pose), f'the number of 2d joints does not match the number of frames: {len(joints_2d)} != {len(smpl_global_pose)}'
 
         # do optimization 
