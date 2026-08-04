@@ -59,6 +59,20 @@ def parse_args():
                              "copy of the same take, upscaling the mask to match. Only "
                              "this one frame needs resolution, so the masks can stay at "
                              "whatever resolution SAM3 ran at.")
+    parser.add_argument("--out_seq", default=None,
+                        help="name the output for this sequence instead of the one "
+                             "derived from --video. Use when reconstructing from a "
+                             "different camera than the pipeline tracks in: the mesh is "
+                             "camera-agnostic geometry, but fp_hy3d_track.py globs for "
+                             "the TRACKING sequence's prefix and would never find a mesh "
+                             "named after the reconstruction source.")
+    parser.add_argument("--out_frame_index", type=int, default=None,
+                        help="frame index to encode in the output name, instead of "
+                             "--frame_index. estimate_scale_video.py parses this out of "
+                             "the filename and uses it to fetch RGB, depth and masks from "
+                             "the TRACKING video to fit the mesh and recover metric scale "
+                             "-- so it must be a frame that exists in that sequence and "
+                             "its masks, which the reconstruction frame need not be.")
     parser.add_argument("--hires_frame_offset", type=int, default=0,
                         help="Frame index in --hires_video corresponding to frame 0 of "
                              "--video. Set this to the trim start 'lo' reported by "
@@ -392,9 +406,22 @@ def main():
     seq_name = extract_seq_name(args.video)
     frame_idx = args.frame_index
 
+    # Reading and naming are deliberately separable. The mesh is camera-agnostic
+    # geometry, so it is often best reconstructed from a camera the pipeline does
+    # not track in -- an egocentric view where the object is close. But
+    # fp_hy3d_track.py globs for the TRACKING sequence's prefix, and
+    # estimate_scale_video.py parses the frame index back out of the filename to
+    # fetch depth and masks from the TRACKING video. Both must therefore name the
+    # tracking sequence, not the source of the geometry.
+    out_seq = args.out_seq or seq_name
+    out_frame = args.out_frame_index if args.out_frame_index is not None else frame_idx
+    if args.out_seq or args.out_frame_index is not None:
+        print(f'Reconstructing from {seq_name} frame {frame_idx}, '
+              f'naming output {out_seq} frame {out_frame}')
+
     # Output directory and file names following the convention:
     # <hy3d_root>/<seq>_<frame_index:03d>_rgba/<seq>_<frame_index:03d>_align.obj
-    out_name = f"{seq_name}_{frame_idx:03d}_rgba"
+    out_name = f"{out_seq}_{out_frame:03d}_rgba"
     outdir = osp.join(args.hy3d_root, out_name)
     obj_name = f"{out_name.replace('_rgba', '')}_align.obj"
     obj_path = osp.join(outdir, obj_name)
