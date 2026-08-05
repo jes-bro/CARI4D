@@ -31,15 +31,25 @@ coconet_out="${COCONET_OUT:-output/coconet}"
 # from. Kept together because they must agree: opt_refineout reads
 # <coconet_out>/<exp_name>+step<N><identifier>/<seq>.pth, which run_horefine
 # writes from cfg.exp_name and the checkpoint it found.
+exp_name="${EXP_NAME:-cari4d-release}"
+exp_step="${EXP_STEP:-step031397}"
+identifier="${IDENTIFIER:-_demo}"
+
+# First frame FoundationPose tracks, in the video's time units. BEHAVE videos
+# carry real timestamps and 3.0 skips the setup seconds; a wild video has no
+# time files, so times are frame indices and 3.0 silently starts at frame 3.
+# That matters because register() runs on whichever frame is first: on the
+# egoexo4d basketball, frames 4-8 carry depth outliers of 23-27m against an
+# apparent-size distance of 4.5-7.4m, so tracking initialised on a frame whose
+# depth was then clipped away and died with 'valid is empty'. Frame 0 reads
+# 6.48m there, agreeing with apparent size to 12%.
+tstart="${TSTART:-3.0}"
+
 # Depth beyond this many metres is discarded before FoundationPose tracking.
 # The 8m default matches BEHAVE's indoor capture volume; a scene shot at
 # distance needs more, or there is no valid depth inside the object mask and
 # tracking cannot initialise.
 zfar="${ZFAR:-8.0}"
-
-exp_name="${EXP_NAME:-cari4d-release}"
-exp_step="${EXP_STEP:-step031397}"
-identifier="${IDENTIFIER:-_demo}"
 
 set -e
 
@@ -47,7 +57,7 @@ echo "masks_root=${masks_root}"
 echo "packed_root=${packed_root}"
 echo "hy3d_root=${hy3d_root}"
 echo "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
-echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}"
+echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}"
 
 for required in "$video" "$masks_root" "$packed_root" "$hy3d_root"; do
     if [ ! -e "$required" ]; then
@@ -88,7 +98,7 @@ python tools/estimate_scale_video.py --wild_video --video ${video} --masks_root 
 # Step 5.2: run FP in tracking mode
 python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 --masks_root ${masks_root} --hy3d_root=${hy3d_root}-metric \
---video ${video} -o ${fp_root} --zfar ${zfar}
+--video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart}
 
 # Step 6: run CoCoNet to refine human + object
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
