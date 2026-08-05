@@ -160,6 +160,16 @@ def main():
     T = len(pose)
     print(f"{seq}: {T} frames, key={args.key}, device={device}")
 
+    # The bundle may store 72-dim SMPL or 156-dim SMPL-H, and get_smpl(.., True)
+    # builds SMPL-H. viz_pred.py:196 makes the same conversion; without it the
+    # blend-shape term is 207 wide against the model's 459.
+    from lib_smpl import pose72to156
+    if pose.shape[1] == 72:
+        pose = pose72to156(pose)
+        print(f"converted 72-dim SMPL pose to {pose.shape[1]}-dim SMPL-H")
+    elif pose.shape[1] != 156:
+        raise SystemExit(f"smpl_pose is {pose.shape[1]} wide; expected 72 or 156")
+
     body = get_smpl(args.gender, True).to(device)
     with torch.no_grad():
         verts_b, _, _, _ = body(pose.to(device), betas.to(device), trans.to(device))
