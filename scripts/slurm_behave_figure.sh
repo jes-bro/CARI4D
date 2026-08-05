@@ -48,6 +48,11 @@ WIDTH="${WIDTH:-796}"
 HEIGHT="${HEIGHT:-448}"
 
 IMAGE_SIZE="${IMAGE_SIZE:-1024}"
+
+# pytorch3d's coarse-rasterisation budget. The wrapper's own default of 50000 is
+# below a reconstructed object's face count, and an overflow drops faces quietly
+# -- holes in the render, no error.
+MAX_FACES_PER_BIN="${MAX_FACES_PER_BIN:-300000}"
 BG="${BG:-1,1,1}"
 FPS="${FPS:-30}"
 STRIDE="${STRIDE:-1}"
@@ -84,6 +89,7 @@ python -u tools/render_behave_style.py \
     --intrinsics "$INTRINSICS" \
     --width "$WIDTH" --height "$HEIGHT" \
     --image_size "$IMAGE_SIZE" \
+    --max_faces_per_bin "$MAX_FACES_PER_BIN" \
     --bg "$BG" --fps "$FPS" --stride "$STRIDE"
 
 log "done"

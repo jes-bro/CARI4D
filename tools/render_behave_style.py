@@ -59,6 +59,11 @@ def parse_args():
                         help="fx,fy,cx,cy for the video the reconstruction was "
                              "made in. The default is what the pipeline printed "
                              "for this take; check your own run's log.")
+    parser.add_argument("--max_faces_per_bin", type=int, default=300000,
+                        help="pytorch3d coarse-rasterisation budget (default: "
+                             "300000). MeshRendererWrapper defaults to 50000, "
+                             "which a reconstructed object overflows -- and an "
+                             "overflow silently drops faces rather than failing.")
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--stride", type=int, default=1)
     return parser.parse_args()
@@ -199,8 +204,15 @@ def main():
 
     lights = PointLights(((0.5, 0.5, 0.5),), ((0.5, 0.5, 0.5),),
                          ((0.05, 0.05, 0.05),), ((0, -2, 0),), device)
+    n_faces = len(faces_b) + len(faces_o)
+    print(f"scene has {n_faces} faces; bin budget {args.max_faces_per_bin}")
+    if n_faces > args.max_faces_per_bin:
+        print("  WARNING: the budget is below the face count. pytorch3d will "
+              "warn about coarse-rasterisation overflow and DROP faces, which "
+              "shows as holes rather than an error. Raise --max_faces_per_bin.")
     renderer = MeshRendererWrapper(image_size=args.image_size, device=device,
-                                   lights=lights)
+                                   lights=lights,
+                                   max_faces_per_bin=args.max_faces_per_bin)
     bg = np.array(vec3(args.bg), dtype=np.float32)
 
     os.makedirs(osp.dirname(osp.abspath(args.out)) or ".", exist_ok=True)
