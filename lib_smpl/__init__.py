@@ -6,16 +6,24 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from .const import SMPL_MODEL_ROOT, SMPL_ASSETS_ROOT
+from .const import SMPL_MODEL_ROOT, SMPL_ASSETS_ROOT, NUM_BETAS
 from .th_hand_prior import GRAB_MEAN_HAND
 from .smpl_module import SMPLLayer
 import numpy as np
 import torch
 
-def get_smpl(gender, hands, model_root=SMPL_MODEL_ROOT):
-    "simple wrapper to get SMPL model"
+def get_smpl(gender, hands, model_root=SMPL_MODEL_ROOT, num_betas=NUM_BETAS):
+    """simple wrapper to get SMPL model
+
+    num_betas is passed explicitly rather than left to SMPLLayer's default of
+    300, which means "keep every shape component the model file has". The MANO
+    SMPL+H release carries 16, while everything in this pipeline works in 10 --
+    const.NUM_BETAS, and run_horefine.py reshapes betas with (-1, 10). Left
+    unset, the layer is wider than the data and matmul fails with
+    "mat1 and mat2 shapes cannot be multiplied (20670x16 and 10xT)".
+    """
     return SMPLLayer(model_root=model_root,
-               gender=gender, hands=hands)
+               gender=gender, hands=hands, num_betas=num_betas)
 
 
 def pose72to156(pose72):

@@ -23,16 +23,10 @@ from transformers import get_scheduler
 import torch.nn.functional as F
 import smplx
 import imageio
-from lib_smpl import get_smpl, SMPL_MODEL_ROOT, SMPL_ASSETS_ROOT
+from lib_smpl import get_smpl, SMPL_MODEL_ROOT, SMPL_ASSETS_ROOT, NUM_BETAS
 from behave_data.behave_video import BaseBehaveVideoData
 from lib_smpl.body_landmark import BodyLandmarks
 from lib_smpl.body_landmark_coco import CocoBodyLandmarks
-
-# The number of SMPL shape coefficients the rest of the pipeline assumes.
-# run_horefine.py:147 reshapes this script's output with (-1, 10), so it is not
-# free to vary -- and NLF checkpoints differ in how many they predict
-# (nlf_l_multi_0.3.2 gives 16), which otherwise fails several stages later.
-NUM_BETAS = 10
 
 
 class GlobalSMPLHOptimizer(BaseBehaveVideoData):
