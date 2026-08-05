@@ -47,7 +47,7 @@ echo "masks_root=${masks_root}"
 echo "packed_root=${packed_root}"
 echo "hy3d_root=${hy3d_root}"
 echo "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
-echo "exp=${exp_name}+${exp_step}${identifier}"
+echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}"
 
 for required in "$video" "$masks_root" "$packed_root" "$hy3d_root"; do
     if [ ! -e "$required" ]; then
