@@ -10,7 +10,7 @@
 some meta data for the dataset
 
 """
-import json, glob
+import json, glob, os
 import numpy as np
 
 # add HODome subjects: Subject01: female 
@@ -73,7 +73,18 @@ def get_test_view_id(video_prefix):
         return None  # use default 1 
     return int(selected_views[video_prefix][1])
 
-def get_hy3d_mesh_file(video_prefix, meshes_root='/home/xianghuix/datasets/behave/selected-views/hy3d-aligned-center'):
+def get_hy3d_mesh_file(video_prefix, meshes_root=None):
+    """Find the aligned Hy3D mesh for a sequence.
+
+    meshes_root defaults to $HY3D_MESHES_ROOT, then to the original author's
+    path. Custom sequences keep their meshes wherever the pipeline was told to
+    put them, and the failure otherwise is a None mesh handed to the loader,
+    which reports it as 'NoneType is not iterable' from inside pytorch3d.
+    """
+    if meshes_root is None:
+        meshes_root = os.environ.get(
+            'HY3D_MESHES_ROOT',
+            '/home/xianghuix/datasets/behave/selected-views/hy3d-aligned-center')
     obj_name = video_prefix.split('_')[2]
     files = sorted(glob.glob(f'{meshes_root}/{video_prefix}*/*{obj_name}*_align.obj'))
     if len(files) == 0:

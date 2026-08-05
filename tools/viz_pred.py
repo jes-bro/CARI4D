@@ -63,6 +63,12 @@ class PredVisualizer(FPBehaveVideoProcessor):
         parser.add_argument('--use_sel_view', action='store_true')
         parser.add_argument('--no_sphere', action='store_true')
         parser.add_argument('--filter_oneeuro', action='store_true')
+        # Sets $HY3D_MESHES_ROOT, which behave_data.const.get_hy3d_mesh_file
+        # reads. A flag as well as the variable because the default is the
+        # original author's home and nothing about the failure names it.
+        parser.add_argument('--hy3d_meshes_root', type=str, default=None,
+                            help='directory holding <seq>*/<seq>*_align.obj for '
+                                 'the reconstructed object meshes')
 
         return parser
 
@@ -686,6 +692,10 @@ def main():
     parser = PredVisualizer.get_parser()
     args = parser.parse_args()
     args.nodepth = True
+
+    if getattr(args, 'hy3d_meshes_root', None):
+        os.environ['HY3D_MESHES_ROOT'] = args.hy3d_meshes_root
+        print(f'using hy3d meshes from {args.hy3d_meshes_root}')
 
     visualizer = PredVisualizer(args)
     if osp.isfile(args.pred_file):

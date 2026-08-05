@@ -100,7 +100,7 @@ set_logging_format()
 
 
 def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_texture='part', hum_only=False, 
-        meshes_root='/home/xianghuix/datasets/behave/selected-views/hy3d-aligned-center'):
+        meshes_root=None):
   from pytorch3d.structures import join_meshes_as_scene
   from pytorch3d.renderer import TexturesUV
   from pytorch3d.io import load_objs_as_meshes
@@ -110,7 +110,16 @@ def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_textu
   
   torch.set_default_tensor_type('torch.FloatTensor')  # fix bug in pytorch3d loading
   obj_name = video_prefix.split('_')[2]
-  file_hy3d = get_hy3d_mesh_file(video_prefix, meshes_root=meshes_root) if use_hy3d else None 
+  # meshes_root=None lets get_hy3d_mesh_file read $HY3D_MESHES_ROOT, so a
+  # custom sequence's meshes are found without threading a path through every
+  # caller between here and the CLI.
+  file_hy3d = get_hy3d_mesh_file(video_prefix, meshes_root=meshes_root) if use_hy3d else None
+  if use_hy3d and file_hy3d is None:
+    raise SystemExit(
+      f'no aligned Hy3D mesh for {video_prefix} under '
+      f'{meshes_root or os.environ.get("HY3D_MESHES_ROOT", "the default root")}. '
+      f'Set HY3D_MESHES_ROOT to the directory holding <seq>*/<seq>*_align.obj, '
+      f'or pass --hy3d_meshes_root.')
   files = ['data/assets/smpl-meshes/meshlab-corr-order/part_surrel.obj' if human_texture == 'part' else 'assets/smpl-meshes/grey-phosa/smpl_grey_phosa.obj',
            file_hy3d if use_hy3d else get_render_template_path_from_seq(video_prefix)
            ]
