@@ -25,10 +25,16 @@ ego mask.
         --calib <trajectory>/online_calibration.jsonl \\
         --extrinsics <trajectory>/aria_extrinsics.json --offset 354
 
-The error's relationship to image radius is the useful part when it fails. A
-constant offset across the image points at the extrinsics or the frame offset; an
-error that grows toward the edges points at the distortion convention, since
-that is where the models diverge.
+When it fails, the magnitude says more than the pattern. Hundreds of pixels is
+a frame mismatch -- the stored ego video does not share the calibration's
+orientation, which is the default this script now corrects for, since Aria's RGB
+sensor is mounted rotated. Only a few tens of pixels would implicate the
+distortion terms, which are worth about 5 px on this camera. A constant error
+across the image points at the extrinsics or the frame offset instead.
+
+Growth with image radius does not by itself distinguish these: a rotation
+produces it too, and produced a +0.99 correlation here while being nothing to do
+with distortion.
 """
 import argparse
 import os
@@ -41,7 +47,7 @@ import numpy as np
 sys.path.append(os.getcwd())
 
 from prep.aria_camera import (load_extrinsics, load_rgb_intrinsics, project,
-                              scale_intrinsics)
+                              scale_intrinsics, video_to_calib_pixels)
 
 
 def parse_args():
@@ -60,6 +66,10 @@ def parse_args():
                         help="index in the full take of clip frame 0 "
                              "(find_trim_offset.py)")
     parser.add_argument("--kid", type=int, default=0)
+    parser.add_argument("--rotate", type=int, default=90,
+                        help="rotation of the stored ego video relative to the "
+                             "calibration frame, in degrees (default: 90, which "
+                             "is what Aria RGB needs). 0 disables.")
     parser.add_argument("--max_frames", type=int, default=0,
                         help="stop after this many frames (0 = all)")
     return parser.parse_args()
@@ -132,7 +142,8 @@ def main():
         if p_cam[2] <= 0:
             continue
         uv = project(p_cam[None, :], params)[0]
-        obs = np.array(centroids[take_idx])
+        obs = video_to_calib_pixels(centroids[take_idx], width,
+                                    args.rotate)[0]
         err = float(np.linalg.norm(uv - obs))
         radius = float(np.linalg.norm(obs - np.array([params[1], params[2]])))
         rows.append((clip_idx, obs, uv, err, radius))
@@ -169,9 +180,15 @@ def main():
         corr = float(np.corrcoef(rad, err)[0, 1])
         print(f"  error-vs-radius correlation: {corr:+.2f}")
         if corr > 0.5:
-            print("  -> FAILS, and the error grows toward the image edges, "
-                  "which is where distortion models differ. Suspect the "
-                  "tangential/thin-prism composition in aria_camera.project.")
+            # A rotation also produces this correlation, and produces far larger
+            # errors than any distortion convention can -- the tangential and
+            # thin-prism terms are worth about 5 px on this camera, so hundreds
+            # of pixels is a frame mismatch, not a model one.
+            print("  -> FAILS, and the error grows toward the image edges. If it "
+                  "is hundreds of pixels, that is too large for a distortion "
+                  "convention: try --rotate 0/90/180/270, since the stored video "
+                  "may not share the calibration's orientation. Only a few tens "
+                  "of pixels would point at the distortion terms.")
         else:
             print("  -> FAILS, but the error does not grow with radius, so it "
                   "is not the distortion model. Suspect the frame offset "

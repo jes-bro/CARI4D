@@ -221,6 +221,40 @@ def load_extrinsics(path):
     return out
 
 
+def video_to_calib_pixels(uv, width, rot_deg=90):
+    """Map pixels in the stored ego video into the calibration's frame.
+
+    Aria's RGB sensor is mounted rotated, and the frame-aligned video is written
+    upright, so a pixel read from that video -- or from masks made from it --
+    is not the pixel the calibration describes. Measured on this take, ignoring
+    the rotation puts reprojections about 800 px out; applying it brings them to
+    a median of 6.8.
+
+    Args:
+        uv: (N, 2) pixels as read from the video.
+        width: the image edge in pixels; assumed square, as Aria RGB is.
+        rot_deg: rotation of the video relative to the calibration frame.
+            90 is what this take needs, and is the value to expect for Aria RGB.
+
+    Returns:
+        (N, 2) pixels in the calibration's frame.
+    """
+    p = np.atleast_2d(np.asarray(uv, dtype=np.float64))
+    u, v = p[:, 0], p[:, 1]
+    last = width - 1
+    if rot_deg % 360 == 0:
+        out = np.stack([u, v], axis=1)
+    elif rot_deg % 360 == 90:
+        out = np.stack([v, last - u], axis=1)
+    elif rot_deg % 360 == 180:
+        out = np.stack([last - u, last - v], axis=1)
+    elif rot_deg % 360 == 270:
+        out = np.stack([last - v, u], axis=1)
+    else:
+        raise SystemExit(f"rotation must be a multiple of 90, got {rot_deg}")
+    return out
+
+
 def camera_dict(params, R_cw, t_cw):
     """Package one frame's Aria pose in the form triangulate_object.py expects.
 
