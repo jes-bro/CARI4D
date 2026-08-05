@@ -44,6 +44,11 @@ import numpy as np
 sys.path.append(os.getcwd())
 
 
+from prep.aria_camera import (camera_dict, load_extrinsics, load_rgb_intrinsics,
+                              project as aria_project, scale_intrinsics,
+                              unproject as aria_unproject, video_to_calib_pixels)
+
+
 def parse_args():
     """Parse the calibration, the views to triangulate and the mask resolution."""
     parser = argparse.ArgumentParser(
@@ -70,6 +75,27 @@ def parse_args():
                         help="drop frames whose mean reprojection error exceeds this many "
                              "pixels; large residuals mean the views are not looking at "
                              "the same object (default: 10.0)")
+    # The ego view is added separately because its pose changes every frame,
+    # while a GoPro is bolted down and has one. It is also the view most worth
+    # having: metres from the ball rather than tens, with no legs between it and
+    # the floor, which is where the exo views lose it.
+    parser.add_argument("--aria_masks_root", default=None,
+                        help="add the Aria ego view; directory holding "
+                             "<aria_name>_masks_k<kid>.h5")
+    parser.add_argument("--aria_name", default="aria02_214-1",
+                        help="ego stream name for the mask file and group")
+    parser.add_argument("--aria_calib", default=None,
+                        help="online_calibration.jsonl, for the RGB intrinsics")
+    parser.add_argument("--aria_extrinsics", default=None,
+                        help="aria_extrinsics.json, one pose per take frame")
+    parser.add_argument("--aria_offset", type=int, default=0,
+                        help="index in the full take of the reference view's "
+                             "frame 0 (prep/find_trim_offset.py)")
+    parser.add_argument("--aria_rotate", type=int, default=90,
+                        help="rotation of the stored ego video against its "
+                             "calibration (default: 90, what Aria RGB needs)")
+    parser.add_argument("--aria_size", type=int, default=1408,
+                        help="edge of the square ego video (default: 1408)")
     parser.add_argument("--out", default=None,
                         help="write the trajectory to this .npz")
     parser.add_argument("--max_rows", type=int, default=25,
@@ -173,10 +199,14 @@ def pixel_to_ray(uv, cam):
     Returns:
         (origin, direction) with direction normalised.
     """
-    pts = np.array([[[uv[0], uv[1]]]], dtype=np.float64)
-    undist = cv2.fisheye.undistortPoints(pts, cam["K"], cam["dist"])
-    x, y = float(undist[0, 0, 0]), float(undist[0, 0, 1])
-    ray_cam = np.array([x, y, 1.0])
+    if cam.get("model") == "fisheye624":
+        ray_cam = aria_unproject(np.asarray(uv, dtype=np.float64)[None, :],
+                                 cam["params"])[0]
+    else:
+        pts = np.array([[[uv[0], uv[1]]]], dtype=np.float64)
+        undist = cv2.fisheye.undistortPoints(pts, cam["K"], cam["dist"])
+        x, y = float(undist[0, 0, 0]), float(undist[0, 0, 1])
+        ray_cam = np.array([x, y, 1.0])
     ray_world = cam["R_cw"].T @ ray_cam
     return cam["centre"], ray_world / np.linalg.norm(ray_world)
 
@@ -212,9 +242,53 @@ def reprojection_error(point, uv, cam):
     p_cam = cam["R_cw"] @ point + cam["t_cw"]
     if p_cam[2] <= 1e-6:
         return np.inf
-    projected, _ = cv2.fisheye.projectPoints(
-        p_cam.reshape(1, 1, 3), np.zeros(3), np.zeros(3), cam["K"], cam["dist"])
-    return float(np.linalg.norm(projected.ravel() - np.asarray(uv)))
+    if cam.get("model") == "fisheye624":
+        projected = aria_project(p_cam[None, :], cam["params"])[0]
+    else:
+        proj, _ = cv2.fisheye.projectPoints(
+            p_cam.reshape(1, 1, 3), np.zeros(3), np.zeros(3), cam["K"], cam["dist"])
+        projected = proj.ravel()
+    return float(np.linalg.norm(projected - np.asarray(uv)))
+
+
+def build_aria_view(args, kid):
+    """Return a view entry for the ego camera, or None if it was not requested.
+
+    Unlike a bolted-down GoPro the Aria moves, so this carries one camera per
+    take frame rather than one camera. Mask pixels are mapped into the
+    calibration's frame on the way in, since the stored video is rotated
+    relative to it.
+
+    Raises:
+        SystemExit: if some but not all of the Aria inputs were given, rather
+            than quietly proceeding without the view that was asked for.
+    """
+    supplied = [args.aria_masks_root, args.aria_calib, args.aria_extrinsics]
+    if not any(supplied):
+        return None
+    if not all(supplied):
+        raise SystemExit("ERROR: --aria_masks_root, --aria_calib and "
+                         "--aria_extrinsics must be given together")
+
+    params = scale_intrinsics(load_rgb_intrinsics(args.aria_calib),
+                              args.aria_size, args.aria_size)
+    ext = load_extrinsics(args.aria_extrinsics)
+    raw = load_object_centroids(args.aria_masks_root, args.aria_name, kid,
+                                args.min_px)
+    centroids, cams = {}, {}
+    for take_idx, (u, v, count) in raw.items():
+        if take_idx not in ext:
+            continue
+        uv = video_to_calib_pixels((u, v), args.aria_size, args.aria_rotate)[0]
+        # Keyed by reference-view frame so the main loop indexes it like any
+        # other view; the take index only matters for looking up the pose.
+        ref_idx = take_idx - args.aria_offset
+        centroids[ref_idx] = (float(uv[0]), float(uv[1]), count)
+        cams[ref_idx] = camera_dict(params, *ext[take_idx])
+    print(f"aria ({args.aria_name}): {len(centroids)} frames with an object mask "
+          f"and a pose, rotated {args.aria_rotate} deg into the calibration frame")
+    return {"uid": "aria", "cam": None, "cams_by_frame": cams,
+            "centroids": centroids, "offset": 0}
 
 
 def main():
@@ -239,8 +313,12 @@ def main():
         centroids = load_object_centroids(masks_root, seq, args.kid, args.min_px)
         print(f"{uid}: {len(centroids)} frames with an object mask, offset {offset}, "
               f"centre {np.round(cams[uid]['centre'], 2)}")
-        views.append({"uid": uid, "cam": cams[uid], "centroids": centroids,
-                      "offset": offset})
+        views.append({"uid": uid, "cam": cams[uid], "cams_by_frame": None,
+                      "centroids": centroids, "offset": offset})
+
+    aria_view = build_aria_view(args, args.kid)
+    if aria_view is not None:
+        views.append(aria_view)
 
     baseline = np.linalg.norm(views[0]["cam"]["centre"] - views[1]["cam"]["centre"])
     print(f"baseline between the first two views: {baseline:.2f} m")
@@ -262,10 +340,11 @@ def main():
             if key not in v["centroids"]:
                 continue
             uv = v["centroids"][key][:2]
-            o, d = pixel_to_ray(uv, v["cam"])
+            cam = v["cam"] if v["cams_by_frame"] is None else v["cams_by_frame"][key]
+            o, d = pixel_to_ray(uv, cam)
             origins.append(o)
             directions.append(d)
-            obs.append((uv, v["cam"]))
+            obs.append((uv, cam))
             contributing.append(v["uid"])
         if len(origins) < args.min_views:
             skipped += 1
