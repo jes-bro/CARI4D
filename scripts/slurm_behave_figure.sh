@@ -16,8 +16,8 @@
 # The blue-body / salmon-object figure, through the repo's own renderer
 # (tools/pyt3d_wrapper.py, as used for the BEHAVE and CARI4D papers).
 #
-#   sbatch scripts/slurm_behave_figure.sh                  # the reconstruction
-#   PRED=output/sim/reference-hy3d/<seq>.pth TAG=sim sbatch scripts/slurm_behave_figure.sh
+#   sbatch scripts/slurm_behave_figure.sh                  # the simulator rollout
+#   PRED=output/opt/<...>/<seq>.pth TAG=recon sbatch scripts/slurm_behave_figure.sh
 #   BG=0,0,0 TAG=dark sbatch scripts/slurm_behave_figure.sh
 #
 # Renders from the camera the reconstruction was made in. That is not a
@@ -31,9 +31,11 @@ CARI4D=/simurgh2/projects/ret-hoi/CARI4D
 
 SEQ="${SEQ:-Date03_Sub01_bball_dribble}"
 
-# Any CARI4D prediction file. Defaults to the reconstruction rather than the
-# simulator rollout, so the first run shows known-good data.
-PRED="${PRED:-$CARI4D/output/opt/cari4d-release+step031397_demo-hy3d3-optv2/${SEQ}.pth}"
+# The simulator rollout, converted by InterMimic's sim_to_cari4d_bundle.py.
+# That is the thing this exists to show: what the physics engine did, rendered
+# the way the papers render a reconstruction. PRED takes any CARI4D prediction
+# file, so pointing it at output/opt/ draws the reconstruction for comparison.
+PRED="${PRED:-$CARI4D/output/sim/reference-hy3d/${SEQ}.pth}"
 KEY="${KEY:-pr}"
 
 HY3D_MESHES_ROOT="${HY3D_MESHES_ROOT:-$CARI4D/data/cari4d-demo/meshes-metric}"
@@ -50,7 +52,7 @@ BG="${BG:-1,1,1}"
 FPS="${FPS:-30}"
 STRIDE="${STRIDE:-1}"
 
-TAG="${TAG:-recon}"
+TAG="${TAG:-sim}"
 OUT="${OUT:-$CARI4D/output/figures/${SEQ}_${TAG}.mp4}"
 
 log() { echo "[behave-fig $(date -u +%H:%M:%S)] $*"; }
