@@ -58,13 +58,23 @@ zfar="${ZFAR:-8.0}"
 # erases the object entirely. Large close objects are unaffected.
 erode_depth_thres="${ERODE_DEPTH_THRES:-0.001}"
 
+# Re-run full registration every N frames instead of tracking incrementally.
+# track_one only refines locally from the previous pose, so an object that
+# moves far between frames -- a dribbled or thrown ball -- leaves its
+# convergence basin and never recovers. fp_behave warns that reinit works badly
+# for symmetric objects because each registration picks a different
+# orientation, but for a sphere that is free: rotation is unobservable and the
+# contact and penetration losses are rotation-invariant, so only translation
+# matters and registration recovers it per frame. Unset means never reinit.
+reinit_every="${REINIT_EVERY:-}"
+
 set -e
 
 echo "masks_root=${masks_root}"
 echo "packed_root=${packed_root}"
 echo "hy3d_root=${hy3d_root}"
 echo "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
-echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}  erode_depth_thres=${erode_depth_thres}"
+echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}  erode_depth_thres=${erode_depth_thres}  reinit_every=${reinit_every:-never}"
 
 for required in "$video" "$masks_root" "$packed_root" "$hy3d_root"; do
     if [ ! -e "$required" ]; then
@@ -106,7 +116,7 @@ python tools/estimate_scale_video.py --wild_video --video ${video} --masks_root 
 python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 --masks_root ${masks_root} --hy3d_root=${hy3d_root}-metric \
 --video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart} \
---erode_depth_thres ${erode_depth_thres}
+--erode_depth_thres ${erode_depth_thres} ${reinit_every:+--reinit_every ${reinit_every}}
 
 # Step 6: run CoCoNet to refine human + object
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
