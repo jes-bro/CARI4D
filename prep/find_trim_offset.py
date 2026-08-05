@@ -123,20 +123,32 @@ def main():
     scores /= len(probe_thumbs)
 
     best = int(np.argmin(scores))
-    order = np.argsort(scores)
-    runner = int(order[1]) if n > 1 else best
-    margin = float(scores[runner] - scores[best])
     print(f"\nbest offset {best}: clip frame 0 is source frame {best}, "
-          f"clip covers {best}..{best + clip_len - 1}")
-    print(f"  score {scores[best]:.4f}, next best offset {runner} "
-          f"at {scores[runner]:.4f} (margin {margin:.4f})")
+          f"clip covers {best}..{best + clip_len - 1}  "
+          f"({best / 30.0:.1f}s in at 30fps)")
+    print(f"  score {scores[best]:.4f}")
 
-    if margin < 0.05:
-        print("  WARNING: the runner-up is nearly as good, so this offset is a "
-              "guess. Either the clip is not from this source, or the take "
-              "repeats itself closely enough that images cannot separate it.")
+    # Compared against the best offset that is NOT adjacent. The neighbouring
+    # offsets always score well -- consecutive video frames look almost the same
+    # -- so treating one of them as a rival runner-up condemns every correct
+    # answer. What would signal real ambiguity is a DISTANT offset scoring
+    # close, meaning the take repeats itself.
+    far = np.array([i for i in range(n) if abs(i - best) > 2])
+    if far.size:
+        rival = int(far[np.argmin(scores[far])])
+        margin = float(scores[rival] - scores[best])
+        rel = margin / (scores[best] + 1e-9)
+        print(f"  nearest non-adjacent rival is offset {rival} at "
+              f"{scores[rival]:.4f} -- {rel * 100:.0f}% worse")
+        if rel < 0.25:
+            print("  WARNING: a distant offset scores nearly as well, so the "
+                  "take repeats itself and this alignment is a guess.")
+        else:
+            print("  no distant offset comes close, so the alignment is sound.")
     else:
-        print("  the margin is clear, so the probes agree on one alignment.")
+        rival, margin, rel = best, 0.0, 0.0
+        print("  source is barely longer than the clip; only one alignment "
+              "is possible.")
 
     if args.out_json:
         payload = {"clip": osp.abspath(args.clip),
