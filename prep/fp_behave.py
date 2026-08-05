@@ -153,6 +153,7 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 mask_h = cv2.resize(mask_h, (int(w / self.scale_ratio), int(h / self.scale_ratio))) > 127
                 mask_o = cv2.resize(mask_o, (int(w / self.scale_ratio), int(h / self.scale_ratio))) > 127
                 # remove depth due to human mask or background mask
+                depth_scene = depth.copy()  # kept for registration, see below
                 depth[~mask_o] = 0
 
                 if is_first_frame or i % reinit_every == 0:  # reinit does not work well, especially for symmetric objects.
@@ -166,8 +167,26 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                     # first frame that is None -- so it surfaces as a TypeError
                     # naming neither depth nor the mask. Print the numbers that
                     # actually decide it.
-                    report_depth_coverage(depth, mask_o, frame_time, zfar)
-                    pose = est.register(K=K_all[k], rgb=color, depth=depth, ob_mask=mask_o.astype(bool),
+                    # register() erodes and bilateral-filters the depth before
+                    # using it (estimater.py:238-239, radius 2 each). Zeroing
+                    # depth outside the object leaves it an isolated island, and
+                    # on a small object the erosion consumes the whole thing:
+                    # 85 valid pixels went in and guess_translation found fewer
+                    # than 4, then register fell back to a pose that does not
+                    # exist yet. Dilating the mask used for zeroing gives the
+                    # erosion a margin to eat. The extra pixels do not pollute
+                    # the result -- register restricts to (depth>=0.001) &
+                    # (ob_mask>0) with the true mask, and tracking below still
+                    # gets the tightly masked depth.
+                    depth_reg = depth
+                    if self.args.depth_context > 0:
+                        ksize = 2 * self.args.depth_context + 1
+                        keep = cv2.dilate(mask_o.astype(np.uint8),
+                                          np.ones((ksize, ksize), np.uint8)) > 0
+                        depth_reg = depth_scene.copy()
+                        depth_reg[~keep] = 0
+                    report_depth_coverage(depth_reg, mask_o, frame_time, zfar)
+                    pose = est.register(K=K_all[k], rgb=color, depth=depth_reg, ob_mask=mask_o.astype(bool),
                                         iteration=5,
                                         vis_score_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_score.png'),
                                         vis_refine_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_refine.png'),
@@ -302,6 +321,14 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
         glctx = dr.RasterizeCudaContext()
         est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer,
                              refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
+        # erode_depth keeps a pixel only when 20% of its 5x5 neighbourhood agrees
+        # to within this. It has to exceed the object's own depth change between
+        # adjacent pixels, which for a small curved object seen at distance is
+        # large: a 24cm sphere at 6m spanning 13px recedes ~18mm per pixel, so
+        # the 1mm default erases it entirely before registration.
+        est.erode_depth_diff_thres = self.args.erode_depth_thres
+        print(f'[fp] erode_depth_diff_thres={est.erode_depth_diff_thres} m, '
+              f'mesh diameter {est.diameter:.3f} m')
         return est, glctx, mesh, refiner
 
 
@@ -335,6 +362,21 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
 
         # 1 for reinit every frame, None for not reinit
         parser.add_argument("--reinit_every", default=None, type=int)
+        parser.add_argument("--erode_depth_thres", default=0.001, type=float,
+                            help="metres of depth difference erode_depth treats as "
+                                 "consistent between neighbouring pixels. Must exceed "
+                                 "the object's own depth change per pixel, or the whole "
+                                 "object is erased before registration -- a 24cm sphere "
+                                 "at 6m spanning 13px recedes ~18mm per pixel. The 1mm "
+                                 "default suits large close objects on a depth sensor "
+                                 "(default: 0.001)")
+        parser.add_argument("--depth_context", default=4, type=int,
+                            help="pixels of depth kept around the object mask when "
+                                 "seeding registration. register() erodes the depth at "
+                                 "radius 2 and bilateral-filters it at radius 2, which "
+                                 "consumes a small object entirely if its depth is an "
+                                 "isolated island. 0 restores the previous behaviour "
+                                 "(default: 4)")
         parser.add_argument("--zfar", default=8.0, type=float,
                             help="depth beyond this many metres is discarded. The 8m "
                                  "default matches BEHAVE's indoor capture volume; raise "

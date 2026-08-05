@@ -51,13 +51,20 @@ tstart="${TSTART:-3.0}"
 # tracking cannot initialise.
 zfar="${ZFAR:-8.0}"
 
+# Metres of depth difference erode_depth treats as consistent between
+# neighbouring pixels, before registration uses the depth. It has to exceed the
+# object's own depth change per pixel: a 24cm sphere at 6m spanning 13px recedes
+# ~18mm per pixel, so the 1mm default marks every neighbour inconsistent and
+# erases the object entirely. Large close objects are unaffected.
+erode_depth_thres="${ERODE_DEPTH_THRES:-0.001}"
+
 set -e
 
 echo "masks_root=${masks_root}"
 echo "packed_root=${packed_root}"
 echo "hy3d_root=${hy3d_root}"
 echo "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
-echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}"
+echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}  erode_depth_thres=${erode_depth_thres}"
 
 for required in "$video" "$masks_root" "$packed_root" "$hy3d_root"; do
     if [ ! -e "$required" ]; then
@@ -98,7 +105,8 @@ python tools/estimate_scale_video.py --wild_video --video ${video} --masks_root 
 # Step 5.2: run FP in tracking mode
 python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 --masks_root ${masks_root} --hy3d_root=${hy3d_root}-metric \
---video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart}
+--video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart} \
+--erode_depth_thres ${erode_depth_thres}
 
 # Step 6: run CoCoNet to refine human + object
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \

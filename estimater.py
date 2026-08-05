@@ -107,6 +107,15 @@ class FoundationPose:
 
     self.init_refiner(refiner, cfg)
 
+    # Depth difference, in metres, within which erode_depth considers two
+    # neighbouring pixels consistent. A pixel survives only when at least 20% of
+    # its 5x5 neighbourhood agrees to within this, so it has to be larger than
+    # the object's own depth change from one pixel to the next. The 1mm default
+    # suits large objects at close range on a depth sensor; a 24cm sphere at 6m
+    # spanning 13 pixels recedes ~18mm per pixel, so every neighbour reads as
+    # inconsistent and the whole object is erased before registration sees it.
+    self.erode_depth_diff_thres = 0.001
+
     self.pose_last = None   # Used for tracking; per the centered mesh
 
     # init pose buffers
@@ -235,7 +244,8 @@ class FoundationPose:
       else:
         self.glctx = glctx
 
-    depth = erode_depth(depth, radius=2, device='cuda')
+    depth = erode_depth(depth, radius=2,
+                        depth_diff_thres=self.erode_depth_diff_thres, device='cuda')
     depth = bilateral_filter_depth(depth, radius=2, device='cuda')
 
     if self.debug>=2:
@@ -328,7 +338,8 @@ class FoundationPose:
       raise RuntimeError
 
     depth = torch.as_tensor(depth, device='cuda', dtype=torch.float)
-    depth = erode_depth(depth, radius=2, device='cuda')
+    depth = erode_depth(depth, radius=2,
+                        depth_diff_thres=self.erode_depth_diff_thres, device='cuda')
     depth = bilateral_filter_depth(depth, radius=2, device='cuda')
 
     xyz_map = depth2xyzmap_batch(depth[None], torch.as_tensor(K, dtype=torch.float, device='cuda')[None], zfar=np.inf)[0]
