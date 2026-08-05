@@ -66,8 +66,22 @@ def parse_args():
                         help="background as r,g,b in 0-1 (default: white)")
     parser.add_argument("--no_ground", action="store_true",
                         help="omit the ground plane")
+    parser.add_argument("--frame", default="camera", choices=["camera", "zup"],
+                        help="frame the prediction is expressed in (default: "
+                             "camera, which is what CARI4D writes). 'zup' skips "
+                             "the conversion for data already gravity-aligned.")
     parser.add_argument("--stride", type=int, default=1)
     return parser.parse_args()
+
+
+# CARI4D reconstructs in the camera's frame: +X right, +Y DOWN, +Z into the
+# scene. A renderer that assumes z-up therefore draws gravity sideways and
+# forward motion vertically -- the subject appears to sink while going nowhere.
+# This sends camera (x, y, z) to (x, z, -y): right stays right, depth becomes
+# forward, and up becomes up.
+CAM_TO_ZUP = np.array([[1.0, 0.0, 0.0],
+                       [0.0, 0.0, 1.0],
+                       [0.0, -1.0, 0.0]], dtype=np.float32)
 
 
 def vec3(text):
@@ -194,6 +208,12 @@ def main():
     verts_o = torch.matmul(obj_v_t[None], R_o.permute(0, 2, 1)) + t_o[:, None]
     faces_o = torch.as_tensor(obj_f, device=device)
     print(f"object: {obj_v.shape[0]} verts, {len(obj_f)} faces")
+
+    if args.frame == "camera":
+        M = torch.as_tensor(CAM_TO_ZUP, device=device)
+        verts_b = torch.matmul(verts_b, M.T)
+        verts_o = torch.matmul(verts_o, M.T)
+        print("converted camera frame to z-up (x, y, z) -> (x, z, -y)")
 
     all_v = torch.cat([verts_b.reshape(-1, 3), verts_o.reshape(-1, 3)], 0)
     lo = all_v.min(0).values.cpu().numpy()

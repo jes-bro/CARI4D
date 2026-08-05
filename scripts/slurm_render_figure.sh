@@ -55,6 +55,10 @@ BODY_COLOR="${BODY_COLOR:-0.75,0.76,0.80}"
 OBJECT_COLOR="${OBJECT_COLOR:-0.85,0.45,0.15}"
 NO_GROUND="${NO_GROUND:-0}"
 
+# CARI4D writes predictions in the camera's frame, where +Y is down and +Z is
+# depth. 'zup' skips the conversion for data already gravity-aligned.
+FRAME="${FRAME:-camera}"
+
 TAG="${TAG:-sim}"
 OUT="${OUT:-$CARI4D/output/figures/${SEQ}_${TAG}.mp4}"
 
@@ -91,6 +95,7 @@ python -u tools/render_figure.py \
     --azim "$AZIM" --elev "$ELEV" --orbit "$ORBIT" --margin "$MARGIN" \
     --size "$SIZE" --fps "$FPS" --stride "$STRIDE" \
     --bg "$BG" --body_color "$BODY_COLOR" --object_color "$OBJECT_COLOR" \
+    --frame "$FRAME" \
     ${GROUND_FLAG:+$GROUND_FLAG}
 
 log "done"
