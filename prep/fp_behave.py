@@ -33,6 +33,85 @@ from behave_data.utils import get_intrinsics_unified
 from behave_data.behave_video import BaseBehaveVideoData, load_masks
 
 
+def clean_object_depth(depth, mask_o, mask_h, human_band, mad_k):
+    """Drop background depth that has bled into the object's mask.
+
+    Monocular depth is smooth and effectively low-resolution, so pixels near an
+    object's silhouette carry a blend of the object and whatever is behind it.
+    On a large object those contaminated boundary pixels are a small fraction of
+    the region and the median outvotes them. On a small one they dominate: the
+    egoexo4d basketball reads a median of 6.47m -- close to the human's 6.65m
+    and to the 7.39m its silhouette implies -- inside a range of 6.15 to 15.94m,
+    where 15.94 is the court behind it.
+
+    Two rejections, in order of how much they can be trusted:
+
+    The human's depth is the strong reference. align_monod2hum rescales the
+    depth map so it matches the metrically-fitted SMPL-H body, which makes the
+    person the one region the depth is calibrated against. This is a
+    human-object interaction method, so the object is normally within a few
+    metres of the person -- anything far outside that band is background.
+
+    Then median-absolute-deviation within whatever survives, which needs no
+    reference at all and catches contamination that happens to fall inside the
+    band.
+
+    Both degrade safely: if a rejection would leave too little to register
+    against, it is skipped and the depth is returned unfiltered. That matters
+    for the case the human reference genuinely does not cover -- a thrown ball,
+    which really is far from the person.
+
+    Args:
+        depth: depth map in metres, already masked to the object.
+        mask_o: boolean object mask.
+        mask_h: boolean human mask, or None.
+        human_band: metres either side of the human's median depth to keep.
+            Non-positive disables the human reference.
+        mad_k: reject object depth deviating by more than this many median
+            absolute deviations. Non-positive disables it.
+
+    Returns:
+        (depth, note) with the cleaned depth and a one-line description of what
+        was removed, for logging.
+    """
+    inside = mask_o & (depth >= 0.001)
+    kept = int(inside.sum())
+    if kept < 4:
+        return depth, 'too little object depth to clean'
+    notes = []
+
+    if human_band > 0 and mask_h is not None:
+        human = depth[mask_h & (depth >= 0.001)]
+        if human.size >= 4:
+            centre = float(np.median(human))
+            near = inside & (np.abs(depth - centre) <= human_band)
+            if int(near.sum()) >= 4:
+                removed = kept - int(near.sum())
+                if removed:
+                    notes.append(f'{removed} px beyond {human_band}m of the human '
+                                 f'at {centre:.2f}m')
+                depth = np.where(inside & ~near, 0, depth)
+                inside, kept = near, int(near.sum())
+            else:
+                notes.append(f'human band would leave {int(near.sum())} px, skipped')
+
+    if mad_k > 0 and kept >= 4:
+        values = depth[inside]
+        centre = float(np.median(values))
+        mad = float(np.median(np.abs(values - centre)))
+        if mad > 1e-6:
+            good = inside & (np.abs(depth - centre) <= mad_k * mad)
+            if int(good.sum()) >= 4:
+                removed = kept - int(good.sum())
+                if removed:
+                    notes.append(f'{removed} px beyond {mad_k:g} MAD of {centre:.2f}m')
+                depth = np.where(inside & ~good, 0, depth)
+            else:
+                notes.append(f'MAD rejection would leave {int(good.sum())} px, skipped')
+
+    return depth, ('; '.join(notes) if notes else 'nothing rejected')
+
+
 def report_depth_coverage(depth, mask_o, frame_time, zfar):
     """Print what register() will see: object mask size and its usable depth.
 
@@ -155,6 +234,16 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 # remove depth due to human mask or background mask
                 depth_scene = depth.copy()  # kept for registration, see below
                 depth[~mask_o] = 0
+                # Drop background depth that has bled into the object's mask.
+                # On a small object those boundary pixels dominate and the
+                # median cannot outvote them, so both the registration seed and
+                # the render-and-compare get a distance that is partly the wall
+                # behind the object.
+                depth, depth_note = clean_object_depth(
+                    depth, mask_o, mask_h, self.args.depth_human_band,
+                    self.args.depth_mad_k)
+                if is_first_frame:
+                    print(f'[fp] depth cleaning: {depth_note}')
 
                 if is_first_frame or i % reinit_every == 0:  # reinit does not work well, especially for symmetric objects.
                     mname_o = f'{self.video_prefix}/{frame_time}-k{k}.obj_rend_mask.png'
@@ -362,6 +451,21 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
 
         # 1 for reinit every frame, None for not reinit
         parser.add_argument("--reinit_every", default=None, type=int)
+        parser.add_argument("--depth_human_band", default=0.0, type=float,
+                            help="metres either side of the human's median depth within "
+                                 "which object depth is kept. align_monod2hum calibrates "
+                                 "the depth map against the fitted body, so the human is "
+                                 "the one region it is anchored to, and in an interaction "
+                                 "the object is normally nearby -- anything far outside "
+                                 "is background bled into the object's mask. Skipped "
+                                 "automatically when it would leave too few pixels, so a "
+                                 "genuinely distant object is not wiped. 0 disables "
+                                 "(default: 0.0)")
+        parser.add_argument("--depth_mad_k", default=0.0, type=float,
+                            help="reject object depth deviating by more than this many "
+                                 "median absolute deviations. Needs no reference, and "
+                                 "catches contamination inside the human band. 0 "
+                                 "disables (default: 0.0)")
         parser.add_argument("--erode_depth_thres", default=0.001, type=float,
                             help="metres of depth difference erode_depth treats as "
                                  "consistent between neighbouring pixels. Must exceed "

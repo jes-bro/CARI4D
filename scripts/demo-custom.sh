@@ -68,6 +68,17 @@ erode_depth_thres="${ERODE_DEPTH_THRES:-0.001}"
 # matters and registration recovers it per frame. Unset means never reinit.
 reinit_every="${REINIT_EVERY:-}"
 
+# Reject background depth that has bled into the object's mask before
+# FoundationPose uses it. DEPTH_HUMAN_BAND keeps only object depth within that
+# many metres of the human's median -- align_monod2hum calibrates the depth map
+# against the fitted body, so the human is the one region it is anchored to.
+# DEPTH_MAD_K then rejects by median absolute deviation, needing no reference.
+# Both skip themselves when they would leave too few pixels, so an object that
+# really is far from the person is not wiped. 0 disables, preserving the
+# previous behaviour.
+depth_human_band="${DEPTH_HUMAN_BAND:-0.0}"
+depth_mad_k="${DEPTH_MAD_K:-0.0}"
+
 set -e
 
 echo "masks_root=${masks_root}"
@@ -75,6 +86,7 @@ echo "packed_root=${packed_root}"
 echo "hy3d_root=${hy3d_root}"
 echo "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
 echo "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}  erode_depth_thres=${erode_depth_thres}  reinit_every=${reinit_every:-never}"
+echo "depth_human_band=${depth_human_band}  depth_mad_k=${depth_mad_k}"
 
 for required in "$video" "$masks_root" "$packed_root" "$hy3d_root"; do
     if [ ! -e "$required" ]; then
@@ -116,7 +128,8 @@ python tools/estimate_scale_video.py --wild_video --video ${video} --masks_root 
 python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 --masks_root ${masks_root} --hy3d_root=${hy3d_root}-metric \
 --video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart} \
---erode_depth_thres ${erode_depth_thres} ${reinit_every:+--reinit_every ${reinit_every}}
+--erode_depth_thres ${erode_depth_thres} ${reinit_every:+--reinit_every ${reinit_every}} \
+--depth_human_band ${depth_human_band} --depth_mad_k ${depth_mad_k}
 
 # Step 6: run CoCoNet to refine human + object
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
