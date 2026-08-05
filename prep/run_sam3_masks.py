@@ -453,7 +453,15 @@ def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
     out_video = os.path.join(vid_dir, f"{seq_name}.0.color.mp4")
     out_h5 = os.path.join(out_dir, f"{seq_name}_masks_k{kid}.h5")
 
-    writer = imageio.get_writer(out_video, fps=fps)
+    # macro_block_size=1 or imageio silently resizes to a multiple of 16, and
+    # the clip stops matching its own masks. The egoexo4d 448 videos are 796
+    # wide, which became 800 -- so stage 4 of the pipeline died on
+    #   mask_gt = mask_h & (dmap_gt > 0)
+    #   ValueError: operands could not be broadcast together with
+    #               shapes (448,796) (448,800)
+    # after UniDepth produced depth at the clip's padded width. The masks here
+    # are written at the source resolution, so the clip must be too.
+    writer = imageio.get_writer(out_video, fps=fps, macro_block_size=1)
     for i in range(lo, hi + 1):
         writer.append_data(frames[i])
     writer.close()
