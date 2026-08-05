@@ -33,11 +33,11 @@ if you want the depth the tracker actually consumes.
 import argparse
 import os
 import os.path as osp
-import pickle
 import sys
 
 import cv2
 import h5py
+import joblib
 import numpy as np
 
 sys.path.append(os.getcwd())
@@ -73,9 +73,13 @@ def parse_args():
 def read_focal(video_path, given):
     """Return the focal length in pixels, from --focal or the saved intrinsics.
 
-    unidepth_behave.py writes a <prefix>.<kid>.color.pkl beside the video holding
-    the intrinsics it estimated, which is what every later stage uses -- so that
-    is the focal length the depth was produced under.
+    unidepth_behave.py:194 writes a <prefix>.<kid>.color.pkl beside the video with
+    joblib.dump of a dict keyed fx/fy/cx/cy. That is the focal length the depth
+    was produced under, so it is the one the apparent-size relation must use --
+    a mismatch here would show up as a fake depth discrepancy.
+
+    fx and fy differ slightly, so their mean is used rather than fx alone; the
+    difference is a fraction of a percent and well below what is being measured.
 
     Raises:
         SystemExit: if neither source provides one.
@@ -85,17 +89,19 @@ def read_focal(video_path, given):
     pkl = video_path.replace(".mp4", ".pkl")
     if not osp.isfile(pkl):
         raise SystemExit(f"ERROR: no intrinsics at {pkl}; pass --focal")
-    with open(pkl, "rb") as f:
-        data = pickle.load(f)
-    values = np.asarray(data).ravel() if not isinstance(data, dict) else None
-    if values is None:
-        for key in ("fx", "focal", "K"):
-            if key in data:
-                values = np.asarray(data[key]).ravel()
-                break
-    if values is None or values.size < 1:
-        raise SystemExit(f"ERROR: could not read a focal length from {pkl}; pass --focal")
-    focal = float(values[0])
+    try:
+        data = joblib.load(pkl)
+    except Exception as exc:
+        raise SystemExit(f"ERROR: could not read {pkl} ({exc}); pass --focal")
+
+    if isinstance(data, dict) and "fx" in data:
+        focal = (float(np.asarray(data["fx"]).ravel()[0])
+                 + float(np.asarray(data["fy"]).ravel()[0])) / 2.0
+    else:
+        values = np.asarray(data, dtype=float).ravel()
+        if values.size < 1:
+            raise SystemExit(f"ERROR: no focal length in {pkl}; pass --focal")
+        focal = float(values[0])
     print(f"focal length {focal:.1f} px, from {osp.basename(pkl)}")
     return focal
 
