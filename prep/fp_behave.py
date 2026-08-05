@@ -91,7 +91,14 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 frame_time = self.get_time_str(t)
 
                 h, w = color.shape[:2]
-                zfar = 8.0
+                # 8m suits BEHAVE's indoor capture volume, but clips everything
+                # further away to zero -- and FoundationPose needs valid depth
+                # inside the object mask to guess an initial translation. On an
+                # egoexo4d basketball take the human alone sits at 6.65m and the
+                # ball beyond that, so register() found no valid pixels and died
+                # on frame 0 with 'NoneType' object is not subscriptable, having
+                # tried to fall back to a previous pose that does not yet exist.
+                zfar = self.args.zfar
                 color = cv2.resize(color, (int(w / self.scale_ratio), int(h / self.scale_ratio)))
                 depth = cv2.resize(depth, (int(w / self.scale_ratio), int(h / self.scale_ratio)),
                                    cv2.INTER_NEAREST) / 1000.
@@ -279,6 +286,12 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
 
         # 1 for reinit every frame, None for not reinit
         parser.add_argument("--reinit_every", default=None, type=int)
+        parser.add_argument("--zfar", default=8.0, type=float,
+                            help="depth beyond this many metres is discarded. The 8m "
+                                 "default matches BEHAVE's indoor capture volume; raise "
+                                 "it for scenes shot at distance, or FoundationPose finds "
+                                 "no valid depth inside the object mask and cannot "
+                                 "initialise (default: 8.0)")
         return parser
 
 
