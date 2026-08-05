@@ -31,6 +31,48 @@ import io, trimesh
 from PIL import Image
 from behave_data.utils import get_intrinsics_unified
 from behave_data.behave_video import BaseBehaveVideoData, load_masks
+
+
+def report_depth_coverage(depth, mask_o, frame_time, zfar):
+    """Print what register() will see: object mask size and its usable depth.
+
+    guess_translation needs at least 4 pixels that are both inside the object
+    mask and carry depth >= 0.001. When it does not get them it prints 'valid is
+    empty' and returns zeros, register falls back to self.pose_last, and on the
+    first frame that is None -- so the whole thing surfaces as
+
+        TypeError: 'NoneType' object is not subscriptable
+
+    which names neither the depth nor the mask. Printing the deciding numbers on
+    every registration frame turns that into an obvious diagnosis, and costs one
+    line per sequence.
+
+    Args:
+        depth: depth map in metres, already masked and zfar-clipped.
+        mask_o: boolean object mask.
+        frame_time: frame identifier, for the message.
+        zfar: the clipping threshold in use, for the message.
+    """
+    mask_px = int(mask_o.sum())
+    inside = depth[mask_o] if mask_px else np.array([])
+    valid = inside[inside >= 0.001] if inside.size else np.array([])
+    print(f'[register] frame {frame_time}: object mask {mask_px} px, '
+          f'{valid.size} with depth >= 0.001'
+          + (f', median {np.median(valid):.2f}m, range '
+             f'{valid.min():.2f}-{valid.max():.2f}m' if valid.size else ''))
+    if valid.size >= 4:
+        return
+    if mask_px < 4:
+        print(f'[register] WARNING: the object mask is {mask_px} px, so there is '
+              f'nothing to register against. Pick a frame where the object is '
+              f'visible -- prep/select_recon_frame.py ranks them.')
+    else:
+        print(f'[register] WARNING: {mask_px} px of object mask but only '
+              f'{valid.size} carry depth, so registration cannot seed a '
+              f'translation and will fail. The mask is fine; the depth over the '
+              f'object is zero or beyond zfar={zfar}. '
+              f'prep/check_object_depth.py compares the depth map against the '
+              f'distance the silhouette implies.')
 import nvdiffrast.torch as dr
 import signal
 from scipy.spatial.transform import Rotation as R
@@ -118,6 +160,13 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                     mask_o = tar_mask[mname_o][:]  # this is 3-4 it/s
                     mask_o = mask_o.astype(np.uint8) * 255
                     mask_o = cv2.resize(mask_o, (int(w / self.scale_ratio), int(h / self.scale_ratio))) > 127
+                    # register() needs valid depth inside the object mask, and its
+                    # failure mode is opaque: guess_translation prints 'valid is
+                    # empty', register falls back to a previous pose, and on the
+                    # first frame that is None -- so it surfaces as a TypeError
+                    # naming neither depth nor the mask. Print the numbers that
+                    # actually decide it.
+                    report_depth_coverage(depth, mask_o, frame_time, zfar)
                     pose = est.register(K=K_all[k], rgb=color, depth=depth, ob_mask=mask_o.astype(bool),
                                         iteration=5,
                                         vis_score_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_score.png'),
