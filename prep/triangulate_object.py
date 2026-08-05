@@ -60,6 +60,10 @@ def parse_args():
     parser.add_argument("--frame_offset", action="append", default=None,
                         help="per-view frame offset, same order as --view, for clips "
                              "trimmed to different ranges (default: 0 for every view)")
+    parser.add_argument("--min_views", type=int, default=2,
+                        help="views that must see the object for a frame to be "
+                             "triangulated. Two is the minimum the geometry allows; "
+                             "more is stricter but reduces coverage (default: 2)")
     parser.add_argument("--min_px", type=int, default=4,
                         help="skip frames whose mask is smaller in any view (default: 4)")
     parser.add_argument("--max_residual", type=float, default=10.0,
@@ -241,38 +245,59 @@ def main():
     baseline = np.linalg.norm(views[0]["cam"]["centre"] - views[1]["cam"]["centre"])
     print(f"baseline between the first two views: {baseline:.2f} m")
 
-    shared = set(views[0]["centroids"])
-    for v in views[1:]:
-        shared &= {idx - v["offset"] + views[0]["offset"] for idx in v["centroids"]}
-    shared = sorted(shared)
-    if not shared:
-        raise SystemExit("ERROR: no frame has an object mask in every view")
-    print(f"frames observed in every view: {len(shared)}")
-
-    rows = []
-    for idx in shared:
-        origins, directions, obs = [], [], []
+    # Triangulate from whichever views see the object, not from views that all
+    # do. Requiring every view makes each extra camera shrink coverage, which is
+    # backwards: different sightlines fail at different moments, so the union is
+    # what more cameras buy. Two rays suffice, and beyond that the reprojection
+    # residual becomes a stronger consistency check rather than a weaker one.
+    #
+    # Frames are those the reference view sees, since the point of this is to
+    # supply depth for that view's sequence -- a frame where it has no object
+    # mask has no object region to write into.
+    rows, skipped = [], 0
+    for idx in sorted(views[0]["centroids"]):
+        origins, directions, obs, contributing = [], [], [], []
         for v in views:
             key = idx - views[0]["offset"] + v["offset"]
+            if key not in v["centroids"]:
+                continue
             uv = v["centroids"][key][:2]
             o, d = pixel_to_ray(uv, v["cam"])
             origins.append(o)
             directions.append(d)
             obs.append((uv, v["cam"]))
+            contributing.append(v["uid"])
+        if len(origins) < args.min_views:
+            skipped += 1
+            continue
         point, spread = triangulate_rays(origins, directions)
         errs = [reprojection_error(point, uv, cam) for uv, cam in obs]
         rows.append({"frame": idx, "xyz": point, "spread": spread,
-                     "residual": float(np.mean(errs))})
+                     "residual": float(np.mean(errs)), "views": contributing})
+
+    if not rows:
+        raise SystemExit(
+            f"ERROR: no frame of {views[0]['uid']} was seen by {args.min_views}+ views. "
+            f"Check the --frame_offset values -- an offset that is wrong by even a few "
+            f"frames can remove the entire overlap.")
+    print(f"frames the reference view sees   : {len(views[0]['centroids'])}")
+    print(f"  triangulated ({args.min_views}+ views)      : {len(rows)}")
+    print(f"  skipped, too few views         : {skipped}")
+    counts = {}
+    for r in rows:
+        counts[len(r["views"])] = counts.get(len(r["views"]), 0) + 1
+    print("  views per frame                : "
+          + ", ".join(f"{n} views x{c}" for n, c in sorted(counts.items())))
 
     good = [r for r in rows if r["residual"] <= args.max_residual]
     print()
-    print(f"{'frame':>6} {'X':>8} {'Y':>8} {'Z':>8} {'ray_gap_m':>10} {'reproj_px':>10}")
-    print("-" * 54)
+    print(f"{'frame':>6} {'X':>8} {'Y':>8} {'Z':>8} {'ray_gap_m':>10} {'reproj_px':>10}  views")
+    print("-" * 64)
     step = max(1, len(rows) // args.max_rows)
     for r in rows[::step]:
         x, y, z = r["xyz"]
         print(f"{r['frame']:>6} {x:>8.2f} {y:>8.2f} {z:>8.2f} "
-              f"{r['spread']:>10.3f} {r['residual']:>10.2f}")
+              f"{r['spread']:>10.3f} {r['residual']:>10.2f}  {','.join(r['views'])}")
 
     residuals = np.array([r["residual"] for r in rows])
     print()
