@@ -47,7 +47,7 @@ INTRINSICS="${INTRINSICS:-401.74728,401.15918,401.4052,228.35431}"
 WIDTH="${WIDTH:-796}"
 HEIGHT="${HEIGHT:-448}"
 
-IMAGE_SIZE="${IMAGE_SIZE:-1024}"
+RENDER_SCALE="${RENDER_SCALE:-2}"
 
 # pytorch3d's coarse-rasterisation budget. The wrapper's own default of 50000 is
 # below a reconstructed object's face count, and an overflow drops faces quietly
@@ -88,7 +88,7 @@ python -u tools/render_behave_style.py \
     --hy3d_meshes_root "$HY3D_MESHES_ROOT" \
     --intrinsics "$INTRINSICS" \
     --width "$WIDTH" --height "$HEIGHT" \
-    --image_size "$IMAGE_SIZE" \
+    --render_scale "$RENDER_SCALE" \
     --max_faces_per_bin "$MAX_FACES_PER_BIN" \
     --bg "$BG" --fps "$FPS" --stride "$STRIDE"
 

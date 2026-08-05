@@ -51,8 +51,13 @@ def parse_args():
     parser.add_argument("--width", type=int, default=796,
                         help="video width the intrinsics belong to")
     parser.add_argument("--height", type=int, default=448)
-    parser.add_argument("--image_size", type=int, default=1024,
-                        help="rendered edge in pixels (default: 1024)")
+    parser.add_argument("--render_scale", type=float, default=2.0,
+                        help="multiple of the source resolution to render at "
+                             "(default: 2, i.e. 1592x896 for a 796x448 video). "
+                             "The intrinsics are scaled to match, so the "
+                             "projection stays the camera's. Rendering square "
+                             "instead puts the principal point in the wrong "
+                             "place and the subject drifts off frame.")
     parser.add_argument("--bg", default="1,1,1",
                         help="background r,g,b in 0-1 (default: white)")
     parser.add_argument("--intrinsics", default="401.74728,401.15918,401.4052,228.35431",
@@ -191,10 +196,15 @@ def main():
     if len(parts) != 4:
         raise SystemExit(f"--intrinsics wants fx,fy,cx,cy; got {args.intrinsics!r}")
     fx, fy, cx, cy = (float(p) for p in parts)
-    K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
-    print(f"intrinsics fx={fx:.2f} fy={fy:.2f} c=({cx:.2f}, {cy:.2f}) "
-          f"for {args.width}x{args.height}")
-    cameras = reconstruction_camera(K, args.width, args.height, device)
+    # Scaled with the render, so the projection remains the camera's own.
+    sc = float(args.render_scale)
+    out_w, out_h = int(round(args.width * sc)), int(round(args.height * sc))
+    K = np.array([[fx * sc, 0.0, cx * sc], [0.0, fy * sc, cy * sc], [0.0, 0.0, 1.0]])
+    print(f"source {args.width}x{args.height}, rendering {out_w}x{out_h} "
+          f"(x{sc:g})")
+    print(f"intrinsics fx={fx * sc:.1f} fy={fy * sc:.1f} "
+          f"c=({cx * sc:.1f}, {cy * sc:.1f})")
+    cameras = reconstruction_camera(K, out_w, out_h, device)
 
     smpl_rgb = torch.tensor(SMPL_OBJ_COLOR_LIST[0], dtype=torch.float32,
                             device=device)
@@ -210,7 +220,9 @@ def main():
         print("  WARNING: the budget is below the face count. pytorch3d will "
               "warn about coarse-rasterisation overflow and DROP faces, which "
               "shows as holes rather than an error. Raise --max_faces_per_bin.")
-    renderer = MeshRendererWrapper(image_size=args.image_size, device=device,
+    # (H, W), not a square: RasterizationSettings takes a tuple, and a square
+    # render with non-square intrinsics misplaces the principal point.
+    renderer = MeshRendererWrapper(image_size=(out_h, out_w), device=device,
                                    lights=lights,
                                    max_faces_per_bin=args.max_faces_per_bin)
     bg = np.array(vec3(args.bg), dtype=np.float32)
