@@ -66,6 +66,12 @@ class PredVisualizer(FPBehaveVideoProcessor):
         # Sets $HY3D_MESHES_ROOT, which behave_data.const.get_hy3d_mesh_file
         # reads. A flag as well as the variable because the default is the
         # original author's home and nothing about the failure names it.
+        parser.add_argument('--no_side', action='store_true',
+                            help='drop the side view and render the front only. '
+                                 'The side camera uses a fixed look-at with '
+                                 'up=(0,1,0), which points at the floor in '
+                                 'camera coordinates, so it is wrong on wild '
+                                 'sequences.')
         parser.add_argument('--hy3d_meshes_root', type=str, default=None,
                             help='directory holding <seq>*/<seq>*_align.obj for '
                                  'the reconstructed object meshes')
@@ -429,7 +435,11 @@ class PredVisualizer(FPBehaveVideoProcessor):
             x1 = int(W * crop_x1_ratio)
             rend_front = rend_front[:, y0:H, x0:x1]
             rend_side = rend_side[:, y0:H, x0:x1]
-            rend_combined = torch.cat([rend_front, rend_side], dim=1)
+            # Front only when asked. Downstream slices at Hc, so a half-height
+            # render makes every [Hc:] slice empty and the side assignments
+            # no-ops -- no other change needed.
+            rend_combined = (rend_front if args.no_side
+                             else torch.cat([rend_front, rend_side], dim=1))
             rend_combined = (rend_combined * 255).byte().cpu().numpy()
             return rend_combined
 
@@ -587,7 +597,8 @@ class PredVisualizer(FPBehaveVideoProcessor):
                     Hc, Wc = color_c.shape[:2]
 
                     # build input panel from cropped halves (front + side both use same crop)
-                    input_panel = np.concatenate([color_c, color_c], axis=0)
+                    input_panel = (color_c.copy() if args.no_side
+                                   else np.concatenate([color_c, color_c], axis=0))
 
                     # overlay front view (top half), keep side view (bottom half) as pure render
                     alpha = 0.7
