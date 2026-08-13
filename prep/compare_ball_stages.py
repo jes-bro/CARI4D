@@ -106,6 +106,10 @@ def parse_args():
                         help="camera uid whose frame the .pth poses live in (default cam04)")
     parser.add_argument("--pth", nargs="+", required=True,
                         help="stage .pth files (CoCoNet / optimizer output), oldest first")
+    parser.add_argument("--key", default="pr", choices=["pr", "in", "gt"],
+                        help="which sub-dict to read from each bundle: 'pr' is the "
+                             "stage's own output, 'in' is what it ingested (the raw "
+                             "FoundationPose track, in the CoCoNet bundle), 'gt' the GT")
     parser.add_argument("--lo", type=int, default=5,
                         help="first frame of the window of interest (default 5)")
     parser.add_argument("--hi", type=int, default=30,
@@ -113,7 +117,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_stage_world_z(path, R_wc, t_wc):
+def load_stage_world_z(path, R_wc, t_wc, key="pr"):
     """Load a stage .pth and return {frame index: world z of the object centre}.
 
     Accepts both the CoCoNet bundle ({'pr': {...}}) and the optimizer output
@@ -123,7 +127,7 @@ def load_stage_world_z(path, R_wc, t_wc):
     import torch
     data = torch.load(path, map_location="cpu", weights_only=False,
                       pickle_module=TOLERANT_PICKLE)
-    pr = data["pr"] if isinstance(data, dict) and "pr" in data else data
+    pr = data[key] if isinstance(data, dict) and key in data else data
     trans = pr["pose_abs"][:, :3, 3].numpy()
     world = (R_wc @ trans.T).T + t_wc
     # frames are stored as '<seq>/<frame_id>' in the CoCoNet bundle and as bare
@@ -154,8 +158,8 @@ def main():
     tri = np.load(args.npz)
     tri_z = {int(f): z for f, z in zip(tri["frames"].astype(int), tri["xyz"][:, 2])}
 
-    stages = [(osp.basename(osp.dirname(osp.abspath(p))) or p,
-               load_stage_world_z(p, R_wc, t_wc)) for p in args.pth]
+    stages = [(f"{osp.basename(osp.dirname(osp.abspath(p))) or p}:{args.key}",
+               load_stage_world_z(p, R_wc, t_wc, args.key)) for p in args.pth]
 
     labels = ["triangulated"] + [lab for lab, _ in stages]
     print(f"  {'frame':>6} " + " ".join(f"{lab:>18}" for lab in labels))
