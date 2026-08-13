@@ -29,7 +29,9 @@ import argparse
 import csv
 import os
 import os.path as osp
+import pickle
 import sys
+import types
 
 import numpy as np
 
@@ -37,6 +39,31 @@ import numpy as np
 # so unpickling needs the repo root importable -- run from the repo root, like
 # every other entry point here.
 sys.path.append(os.getcwd())
+
+
+class TolerantUnpickler(pickle.Unpickler):
+    """Unpickler that stubs any class it cannot import.
+
+    The bundles carry config objects whose classes drag in the full training
+    stack (accelerate, ...). This script only reads pose_abs and frames --
+    plain tensors and strings -- so anything unimportable is replaced with an
+    inert placeholder instead of failing the whole load.
+    """
+
+    def find_class(self, module, name):
+        """Resolve normally; on ImportError/AttributeError return a stub class."""
+        try:
+            return super().find_class(module, name)
+        except (ImportError, AttributeError):
+            return type(name, (), {"__init__": lambda self, *a, **k: None})
+
+
+# torch.load(pickle_module=...) needs an Unpickler attribute and a __name__
+# (it checks for dill), so wrap the tolerant class in a real module object.
+# torch's own storage handling is kept: its wrapper subclasses this Unpickler
+# and defers non-storage lookups to it.
+TOLERANT_PICKLE = types.ModuleType("tolerant_pickle")
+TOLERANT_PICKLE.Unpickler = TolerantUnpickler
 
 
 def quaternion_to_matrix(q):
@@ -94,7 +121,8 @@ def load_stage_world_z(path, R_wc, t_wc):
     in the camera frame, mapped to world via x_w = R_wc @ x_c + t_wc.
     """
     import torch
-    data = torch.load(path, map_location="cpu", weights_only=False)
+    data = torch.load(path, map_location="cpu", weights_only=False,
+                      pickle_module=TOLERANT_PICKLE)
     pr = data["pr"] if isinstance(data, dict) and "pr" in data else data
     trans = pr["pose_abs"][:, :3, 3].numpy()
     world = (R_wc @ trans.T).T + t_wc
