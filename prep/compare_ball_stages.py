@@ -104,8 +104,11 @@ def parse_args():
                         help="gopro_calibs.csv from the take's trajectory/ directory")
     parser.add_argument("--cam", default="cam04",
                         help="camera uid whose frame the .pth poses live in (default cam04)")
-    parser.add_argument("--pth", nargs="+", required=True,
+    parser.add_argument("--pth", nargs="*", default=[],
                         help="stage .pth files (CoCoNet / optimizer output), oldest first")
+    parser.add_argument("--fp_pkl", default=None,
+                        help="merged FoundationPose pickle (<fp_root>/<prefix>_all.pkl), "
+                             "the raw track before any packing")
     parser.add_argument("--key", default="pr", choices=["pr", "in", "gt"],
                         help="which sub-dict to read from each bundle: 'pr' is the "
                              "stage's own output, 'in' is what it ingested (the raw "
@@ -117,8 +120,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_stage_world_z(path, R_wc, t_wc, key="pr"):
-    """Load a stage .pth and return {frame index: world z of the object centre}.
+def frame_id(f):
+    """Parse a frame reference: '<seq>/000015', '000015', or a numeric time."""
+    return int(float(str(f).split("/")[-1]))
+
+
+def load_stage_world(path, R_wc, t_wc, key="pr"):
+    """Load a stage .pth and return {frame index: world xyz of the object centre}.
 
     Accepts both the CoCoNet bundle ({'pr': {...}}) and the optimizer output
     (same layout after 'pr' is overwritten); the translation is pose_abs[:,:3,3]
@@ -130,9 +138,29 @@ def load_stage_world_z(path, R_wc, t_wc, key="pr"):
     pr = data[key] if isinstance(data, dict) and key in data else data
     trans = pr["pose_abs"][:, :3, 3].numpy()
     world = (R_wc @ trans.T).T + t_wc
-    # frames are stored as '<seq>/<frame_id>' in the CoCoNet bundle and as bare
-    # ids elsewhere; the trailing path component is the id either way.
-    return {int(str(f).split("/")[-1]): world[i, 2] for i, f in enumerate(pr["frames"])}
+    return {frame_id(f): world[i] for i, f in enumerate(pr["frames"])}
+
+
+def load_fp_world(path, R_wc, t_wc):
+    """Load a merged FoundationPose pickle and return {frame index: world xyz}.
+
+    merge_pickles writes a dict with 'frames' plus pose arrays of shape
+    (T, K, 4, 4); the pose key name varies, so take the first array of that
+    shape and use camera 0.
+    """
+    import joblib
+    data = joblib.load(path)
+    poses = None
+    for k, v in data.items():
+        arr = np.asarray(v)
+        if arr.ndim >= 3 and arr.shape[-2:] == (4, 4):
+            poses = arr.reshape(arr.shape[0], -1, 4, 4)[:, 0]
+            break
+    if poses is None:
+        raise SystemExit(f"ERROR: no (T,...,4,4) pose array in {path}; keys: {list(data)}")
+    trans = poses[:, :3, 3]
+    world = (R_wc @ trans.T).T + t_wc
+    return {frame_id(f): world[i] for i, f in enumerate(data["frames"])}
 
 
 def summarise(label, zs):
@@ -156,26 +184,49 @@ def main():
     R_wc, t_wc = cams[args.cam]
 
     tri = np.load(args.npz)
-    tri_z = {int(f): z for f, z in zip(tri["frames"].astype(int), tri["xyz"][:, 2])}
+    tri_xyz = {int(f): p for f, p in zip(tri["frames"].astype(int), tri["xyz"])}
 
-    stages = [(f"{osp.basename(osp.dirname(osp.abspath(p))) or p}:{args.key}",
-               load_stage_world_z(p, R_wc, t_wc, args.key)) for p in args.pth]
+    stages = []
+    if args.fp_pkl:
+        stages.append(("fp-raw", load_fp_world(args.fp_pkl, R_wc, t_wc)))
+    stages += [(f"{osp.basename(osp.dirname(osp.abspath(p))) or p}:{args.key}",
+                load_stage_world(p, R_wc, t_wc, args.key)) for p in args.pth]
+    if not stages:
+        raise SystemExit("ERROR: give at least one of --pth / --fp_pkl")
 
     labels = ["triangulated"] + [lab for lab, _ in stages]
     print(f"  {'frame':>6} " + " ".join(f"{lab:>18}" for lab in labels))
     rows = {lab: [] for lab in labels}
     for f in range(args.lo, args.hi + 1):
-        cells = [tri_z.get(f)] + [zs.get(f) for _, zs in stages]
-        for lab, z in zip(labels, cells):
-            rows[lab].append((f, z))
-        print(f"  {f:>6} " + " ".join(f"{z:>18.3f}" if z is not None else f"{'-':>18}"
-                                      for z in cells))
+        cells = [tri_xyz.get(f)] + [xs.get(f) for _, xs in stages]
+        for lab, p in zip(labels, cells):
+            rows[lab].append((f, None if p is None else p[2]))
+        print(f"  {f:>6} " + " ".join(f"{p[2]:>18.3f}" if p is not None else f"{'-':>18}"
+                                      for p in cells))
 
     print("\n== summary (window {}-{}) ==".format(args.lo, args.hi))
     for lab in labels:
         summarise(lab, rows[lab])
     print("  read: the first column whose drop is much smaller than the "
           "triangulated drop is the stage that flattened the bounce.")
+
+    # Error decomposition against the triangulation, in the camera's terms: the
+    # component along the viewing ray is a depth error (seeding / refinement /
+    # depth map), the perpendicular component is an image-position error (mask
+    # centroid). Which one dominates says where the fix belongs.
+    cam_centre = t_wc
+    for lab, xs in stages:
+        print(f"\n== {lab} error vs triangulation (m, window {args.lo}-{args.hi}) ==")
+        print(f"  {'frame':>6} {'total':>8} {'along-ray':>10} {'perp':>8}")
+        for f in range(args.lo, args.hi + 1):
+            if f not in tri_xyz or f not in xs:
+                continue
+            ray = tri_xyz[f] - cam_centre
+            ray = ray / np.linalg.norm(ray)
+            err = xs[f] - tri_xyz[f]
+            along = float(err @ ray)
+            perp = float(np.linalg.norm(err - along * ray))
+            print(f"  {f:>6} {np.linalg.norm(err):>8.3f} {along:>10.3f} {perp:>8.3f}")
     return 0
 
 
