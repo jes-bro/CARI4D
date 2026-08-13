@@ -27,9 +27,16 @@ Usage:
 """
 import argparse
 import csv
+import os
 import os.path as osp
+import sys
 
 import numpy as np
+
+# The stage bundles pickle objects from the repo's own packages (learning.*),
+# so unpickling needs the repo root importable -- run from the repo root, like
+# every other entry point here.
+sys.path.append(os.getcwd())
 
 
 def quaternion_to_matrix(q):
