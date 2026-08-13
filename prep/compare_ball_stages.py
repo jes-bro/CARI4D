@@ -91,7 +91,9 @@ def load_stage_world_z(path, R_wc, t_wc):
     pr = data["pr"] if isinstance(data, dict) and "pr" in data else data
     trans = pr["pose_abs"][:, :3, 3].numpy()
     world = (R_wc @ trans.T).T + t_wc
-    return {int(str(f)): world[i, 2] for i, f in enumerate(pr["frames"])}
+    # frames are stored as '<seq>/<frame_id>' in the CoCoNet bundle and as bare
+    # ids elsewhere; the trailing path component is the id either way.
+    return {int(str(f).split("/")[-1]): world[i, 2] for i, f in enumerate(pr["frames"])}
 
 
 def summarise(label, zs):
