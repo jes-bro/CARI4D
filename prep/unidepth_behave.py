@@ -120,6 +120,7 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
 
             video_iter = ctrl.video_iter
             focals = []
+            pkl_provided = False
             if args.data_source == 'behave':
                 fx, fy, cx, cy = get_intrinsics(kid)
                 if not args.wild_video:
@@ -127,8 +128,21 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
                                     [0., fy, cy],
                                     [0, 0., 1]])
                 else:
+                    # A calibrated/rectified video carries its true intrinsics in a
+                    # sibling .pkl (prep/rectify_fisheye.py writes one). Conditioning
+                    # UniDepth on the real camera beats letting it guess from pixels
+                    # -- on the egoexo4d GoPros the guess was ~10% long in focal --
+                    # and a provided file must not be overwritten by the guess below.
                     intrinsics = None
-                
+                    pkl_provided = osp.isfile(ctrl.video_path.replace('.mp4', '.pkl'))
+                    if pkl_provided:
+                        d = joblib.load(ctrl.video_path.replace('.mp4', '.pkl'))
+                        intrinsics = np.array([[float(d['fx']), 0, float(d['cx'])],
+                                               [0., float(d['fy']), float(d['cy'])],
+                                               [0., 0., 1.]])
+                        print('using provided intrinsics from',
+                              ctrl.video_path.replace('.mp4', '.pkl'))
+
             elif args.data_source == 'hodome':
                 from behave_data.const import get_camera_K_hodome, HODOME_VIEW_IDS
                 intrinsics = get_camera_K_hodome(osp.basename(ctrl.video_path), HODOME_VIEW_IDS[kid])
@@ -181,7 +195,9 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
             if len(focals) > 0:
                 print('average focal length:', np.mean(focals))
                 # save as file
-                if args.wild_video:
+                if args.wild_video and pkl_provided:
+                    print('keeping provided intrinsics, not overwriting the .pkl')
+                elif args.wild_video:
                     assert len(focals) > 0
                     # fx, fy = np.mean(focals), np.mean(focals)
                     # cx, cy = W/2, H/2
