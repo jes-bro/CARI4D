@@ -33,7 +33,7 @@
 
 set -euo pipefail
 
-SRC_DIR=${SRC_DIR:?set SRC_DIR to the take's frame_aligned_videos dir}
+SRC_DIR=${SRC_DIR:?set SRC_DIR to the take frame_aligned_videos dir}
 START=${START:?set START to the first take frame of the window}
 END=${END:?set END to the last take frame of the window (inclusive)}
 OUT_DIR=${OUT_DIR:-sam3masks/trimmed_vids}
