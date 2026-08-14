@@ -28,11 +28,21 @@ Usage:
         --view cam04:<masks_root>:<seq> --view cam03:<masks_root>:<seq> \\
         --width 796 --height 448 --out object_xyz.npz
 
-Each --view is <cam_uid>:<masks_root>:<sequence_name>. Masks are read at the
-resolution given by --width/--height and the calibration is scaled to match.
+Each --view is <cam_uid>:<masks_root>:<sequence_name>. Each mask set's
+resolution is read from its own H5 (a stored mask is an (H, W) array) and the
+calibration is scaled per view to match, so mask sets of different resolutions
+are simply different observations of the same geometry. The same camera may
+appear in several --view entries (say a 448p and a 4K mask set): per frame the
+camera contributes exactly one of them -- two observations from one camera
+share a ray origin and add no 3D information -- and the one kept is whichever
+agrees best with the other cameras, measured by the same reprojection residual
+used to accept or reject the frame. Residuals are always expressed in
+--width-scale pixels, whatever resolution the masks came from, so
+--max_residual means one thing.
 """
 import argparse
 import csv
+import itertools
 import os
 import os.path as osp
 import sys
@@ -56,11 +66,15 @@ def parse_args():
     parser.add_argument("--calib", required=True,
                         help="gopro_calibs.csv from the take's trajectory/ directory")
     parser.add_argument("--view", action="append", required=True,
-                        help="<cam_uid>:<masks_root>:<seq_name>, repeatable; at least two")
+                        help="<cam_uid>:<masks_root>:<seq_name>, repeatable; at least two. "
+                             "Mask resolution is read from the H5 itself. The same cam_uid "
+                             "may appear with several mask sets; per frame the best-agreeing "
+                             "one is used")
     parser.add_argument("--width", type=int, required=True,
-                        help="width of the video the masks were computed on")
+                        help="reference width: residuals are reported in this pixel scale "
+                             "regardless of each mask set's own resolution")
     parser.add_argument("--height", type=int, required=True,
-                        help="height of the video the masks were computed on")
+                        help="reference height, paired with --width")
     parser.add_argument("--kid", type=int, default=0, help="camera id in the mask keys")
     parser.add_argument("--frame_offset", action="append", default=None,
                         help="per-view frame offset, same order as --view, for clips "
@@ -160,20 +174,24 @@ def quaternion_to_matrix(q):
 
 
 def load_object_centroids(masks_root, seq_name, kid, min_px):
-    """Return {frame index: (u, v, pixel count)} for the object's mask centroid.
+    """Return ({frame index: (u, v, pixel count)}, (H, W)) for the object masks.
 
     The centroid of a sphere's silhouette is its projected centre, so for a ball
     this is the physically right point. For an asymmetric object it is merely a
     consistent one, which gives a good trajectory and a slightly biased absolute
     position.
 
+    The (H, W) is the resolution the masks were computed at, read from the
+    stored arrays themselves -- it is what the caller scales the calibration to.
+
     Raises:
-        SystemExit: if the mask file or its sequence group is missing.
+        SystemExit: if the mask file, its sequence group, or any object mask
+            is missing.
     """
     path = osp.join(masks_root, f"{seq_name}_masks_k{kid}.h5")
     if not osp.isfile(path):
         raise SystemExit(f"ERROR: no mask file at {path}")
-    out = {}
+    out, shape = {}, None
     with h5py.File(path, "r") as f:
         if seq_name not in f:
             raise SystemExit(f"ERROR: group '{seq_name}' not in {path}; "
@@ -183,11 +201,15 @@ def load_object_centroids(masks_root, seq_name, kid, min_px):
             if not key.endswith(f"-k{kid}.obj_rend_mask.png"):
                 continue
             mask = group[key][:]
+            if shape is None:
+                shape = mask.shape
             ys, xs = np.where(mask)
             if len(ys) < min_px:
                 continue
             out[int(key.split("-")[0])] = (float(xs.mean()), float(ys.mean()), len(ys))
-    return out
+    if shape is None:
+        raise SystemExit(f"ERROR: no object masks for {seq_name} in {path}")
+    return out, shape
 
 
 def pixel_to_ray(uv, cam):
@@ -273,8 +295,8 @@ def build_aria_view(args, kid):
     params = scale_intrinsics(load_rgb_intrinsics(args.aria_calib),
                               args.aria_size, args.aria_size)
     ext = load_extrinsics(args.aria_extrinsics)
-    raw = load_object_centroids(args.aria_masks_root, args.aria_name, kid,
-                                args.min_px)
+    raw, _ = load_object_centroids(args.aria_masks_root, args.aria_name, kid,
+                                   args.min_px)
     centroids, cams = {}, {}
     for take_idx, (u, v, count) in raw.items():
         if take_idx not in ext:
@@ -287,8 +309,9 @@ def build_aria_view(args, kid):
         cams[ref_idx] = camera_dict(params, *ext[take_idx])
     print(f"aria ({args.aria_name}): {len(centroids)} frames with an object mask "
           f"and a pose, rotated {args.aria_rotate} deg into the calibration frame")
-    return {"uid": "aria", "cam": None, "cams_by_frame": cams,
-            "centroids": centroids, "offset": 0}
+    return {"uid": "aria", "label": "aria", "cam": None, "cams_by_frame": cams,
+            "centroids": centroids, "offset": 0,
+            "err_scale": args.width / args.aria_size}
 
 
 def main():
@@ -297,24 +320,31 @@ def main():
     if len(args.view) < 2:
         raise SystemExit("ERROR: at least two --view arguments are needed")
 
-    cams = read_calibration(args.calib, args.width, args.height)
     offsets = [int(o) for o in (args.frame_offset or [])]
     offsets += [0] * (len(args.view) - len(offsets))
 
+    # One calibration per mask resolution encountered; each view's masks tell
+    # their own resolution, so nothing on the command line has to.
+    cams_by_res = {}
     views = []
     for spec, offset in zip(args.view, offsets):
         parts = spec.split(":")
         if len(parts) != 3:
             raise SystemExit(f"ERROR: --view must be <cam_uid>:<masks_root>:<seq>, got {spec}")
         uid, masks_root, seq = parts
+        centroids, (mask_h, mask_w) = load_object_centroids(
+            masks_root, seq, args.kid, args.min_px)
+        if (mask_w, mask_h) not in cams_by_res:
+            cams_by_res[(mask_w, mask_h)] = read_calibration(args.calib, mask_w, mask_h)
+        cams = cams_by_res[(mask_w, mask_h)]
         if uid not in cams:
             raise SystemExit(f"ERROR: {uid} not in the calibration; "
                              f"found {sorted(cams)}")
-        centroids = load_object_centroids(masks_root, seq, args.kid, args.min_px)
-        print(f"{uid}: {len(centroids)} frames with an object mask, offset {offset}, "
-              f"centre {np.round(cams[uid]['centre'], 2)}")
-        views.append({"uid": uid, "cam": cams[uid], "cams_by_frame": None,
-                      "centroids": centroids, "offset": offset})
+        print(f"{uid} ({seq}, {mask_w}x{mask_h}): {len(centroids)} frames with an "
+              f"object mask, offset {offset}, centre {np.round(cams[uid]['centre'], 2)}")
+        views.append({"uid": uid, "label": seq, "cam": cams[uid], "cams_by_frame": None,
+                      "centroids": centroids, "offset": offset,
+                      "err_scale": args.width / mask_w})
 
     aria_view = build_aria_view(args, args.kid)
     if aria_view is not None:
@@ -334,7 +364,10 @@ def main():
     # mask has no object region to write into.
     rows, skipped = [], 0
     for idx in sorted(views[0]["centroids"]):
-        origins, directions, obs, contributing = [], [], [], []
+        # Candidate observations per physical camera. A camera with several
+        # mask sets contributes exactly one -- two rays from the same origin
+        # add no 3D information and make the least squares degenerate.
+        by_uid, uid_order = {}, []
         for v in views:
             key = idx - views[0]["offset"] + v["offset"]
             if key not in v["centroids"]:
@@ -342,17 +375,36 @@ def main():
             uv = v["centroids"][key][:2]
             cam = v["cam"] if v["cams_by_frame"] is None else v["cams_by_frame"][key]
             o, d = pixel_to_ray(uv, cam)
-            origins.append(o)
-            directions.append(d)
-            obs.append((uv, cam))
-            contributing.append(v["uid"])
-        if len(origins) < args.min_views:
+            if v["uid"] not in by_uid:
+                uid_order.append(v["uid"])
+            by_uid.setdefault(v["uid"], []).append(
+                {"uv": uv, "cam": cam, "o": o, "d": d,
+                 "scale": v["err_scale"], "label": v["label"]})
+        if len(by_uid) < args.min_views:
             skipped += 1
             continue
-        point, spread = triangulate_rays(origins, directions)
-        errs = [reprojection_error(point, uv, cam) for uv, cam in obs]
-        rows.append({"frame": idx, "xyz": point, "spread": spread,
-                     "residual": float(np.mean(errs)), "views": contributing})
+        # Which mask set is best for a camera on this frame is decided by the
+        # geometry: try the combinations and keep the one whose triangulation
+        # the contributing views agree on most, in reference-scale pixels.
+        # The combination count is tiny (mask sets per camera is 2 or 3), but
+        # cap it anyway and fall back to first-listed rather than blow up.
+        n_combos = int(np.prod([len(by_uid[u]) for u in uid_order]))
+        if n_combos > 256:
+            combos = [tuple(by_uid[u][0] for u in uid_order)]
+        else:
+            combos = itertools.product(*(by_uid[u] for u in uid_order))
+        best = None
+        for combo in combos:
+            point, spread = triangulate_rays([c["o"] for c in combo],
+                                             [c["d"] for c in combo])
+            errs = [reprojection_error(point, c["uv"], c["cam"]) * c["scale"]
+                    for c in combo]
+            mean_err = float(np.mean(errs))
+            if best is None or mean_err < best["residual"]:
+                best = {"frame": idx, "xyz": point, "spread": spread,
+                        "residual": mean_err,
+                        "views": [c["label"] for c in combo]}
+        rows.append(best)
 
     if not rows:
         raise SystemExit(
