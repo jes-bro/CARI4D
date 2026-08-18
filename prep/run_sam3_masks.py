@@ -49,6 +49,21 @@ def parse_args():
                         help="HuggingFace token for SAM3 checkpoint access")
     parser.add_argument("--chunk_size", type=int, default=300,
                         help="Process video in chunks of this many frames to avoid OOM (default: 300)")
+    parser.add_argument("--object_select", choices=["near-person", "single", "union"],
+                        default="near-person",
+                        help="How to pick the object among SAM3's detections. A kitchen "
+                             "has many cups and the union of all of them is not a "
+                             "trajectory, so the default keeps ONE instance per frame, "
+                             "seeded by proximity to the person -- the manipulated object "
+                             "is the one at their hands -- then held by frame-to-frame "
+                             "overlap. 'single' seeds by largest instead; 'union' is the "
+                             "old merge-everything behaviour")
+    parser.add_argument("--object_open", type=int, default=3,
+                        help="Radius in px of a morphological opening applied to object "
+                             "masks: severs thin attachments (a poured liquid stream, a "
+                             "utensil handle) before keeping one connected component. "
+                             "Guarded: if cleanup would erase most of the mask, the "
+                             "original is kept. 0 disables (default: 3)")
     parser.add_argument("--zoom", action="store_true", default=True,
                         help="Visualization: magnified inset around the object (DEFAULT ON). "
                              "A ball is ~18px in a 796x448 frame; at 1x you cannot tell "
@@ -116,13 +131,16 @@ def merge_masks_from_output(out):
     return masks.any(axis=0)  # (H, W) bool
 
 
-def select_single_mask(out, ref_mask=None):
+def select_single_mask(out, ref_mask=None, person_mask=None):
     """Pick exactly one instance from a SAM3 detection output.
 
-    Prefers the instance overlapping ref_mask the most (keeps the same person
-    across chunk boundaries, where object ids are not stable); otherwise falls
-    back to the largest instance. Returns (mask, obj_id), or (None, None) if
-    nothing was detected.
+    Prefers the instance overlapping ref_mask the most (keeps the same target
+    across chunk boundaries, where object ids are not stable). With no usable
+    ref_mask, a given person_mask breaks the tie instead: the instance nearest
+    the (dilated) person wins, because the manipulated object is the one at
+    their hands, not the largest look-alike in the scene. Falls back to the
+    largest instance. Returns (mask, obj_id), or (None, None) if nothing was
+    detected.
     """
     masks = out["out_binary_masks"]  # (N, H, W) bool
     obj_ids = [int(i) for i in out["out_obj_ids"]]
@@ -135,9 +153,51 @@ def select_single_mask(out, ref_mask=None):
         if overlaps[best] > 0:
             return masks[best], obj_ids[best]
 
+    if person_mask is not None and person_mask.any():
+        # Reach scales with the frame so 448p and 4K behave alike.
+        k = max(15, person_mask.shape[0] // 16)
+        near = cv2.dilate(person_mask.astype(np.uint8),
+                          np.ones((k, k), np.uint8)) > 0
+        overlaps = [int(np.logical_and(m, near).sum()) for m in masks]
+        best = int(np.argmax(overlaps))
+        if overlaps[best] > 0:
+            return masks[best], obj_ids[best]
+
     areas = [int(m.sum()) for m in masks]
     best = int(np.argmax(areas))
     return masks[best], obj_ids[best]
+
+
+def clean_object_mask(mask, prev_mask, open_px):
+    """Sever thin attachments from an object mask and keep one component.
+
+    A poured liquid stream or a utensil handle joins the object as a thin
+    bridge that inflates the silhouette and drags the centroid. Opening with a
+    small kernel cuts such bridges; among the resulting components the one
+    overlapping the previous frame's mask wins (largest as fallback), dropping
+    the severed parts. Guarded twice: if the opening erases most of the mask
+    -- a small or distant object can be thinner than the kernel -- the
+    original mask is returned untouched.
+    """
+    if mask is None or open_px <= 0 or not mask.any():
+        return mask
+    m = mask.astype(np.uint8)
+    k = 2 * open_px + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    opened = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
+    if opened.sum() < 0.25 * m.sum():
+        return mask
+    n, labels = cv2.connectedComponents(opened)
+    if n <= 1:
+        return mask
+    best, best_key = None, (-1, -1)
+    for i in range(1, n):
+        comp = labels == i
+        overlap = int(np.logical_and(comp, prev_mask).sum()) if prev_mask is not None else 0
+        key = (overlap, int(comp.sum()))
+        if key > best_key:
+            best, best_key = comp, key
+    return best if best is not None else mask
 
 
 def mask_for_obj_id(out, obj_id):
@@ -161,12 +221,14 @@ def save_chunk_as_video(frames_chunk, tmpdir, chunk_idx, fps):
 
 
 def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
-                           single_instance=False):
+                           single_instance=False, person_masks=None, open_px=0):
     """Segment a text prompt across the video using chunked processing to avoid OOM.
 
     With single_instance=True, only one tracked instance is kept per frame instead
-    of the union of all detections: the largest instance at the start of the first
-    chunk, then whichever instance best overlaps the previous chunk's last mask.
+    of the union of all detections: seeded at each chunk start by overlap with the
+    previous chunk's last mask, else by proximity to the person (when person_masks
+    is given), else by size. open_px > 0 additionally runs clean_object_mask on
+    every stored mask to cut thin attachments like a poured stream.
     """
     num_frames = len(frames)
     all_masks = {}
@@ -217,10 +279,13 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
             # Store frame 0 mask from detection
             tracked_id = None
             if single_instance:
-                mask, tracked_id = select_single_mask(det_out, ref_mask=prev_mask)
+                seed_person = None if person_masks is None else person_masks.get(chunk_start)
+                mask, tracked_id = select_single_mask(det_out, ref_mask=prev_mask,
+                                                      person_mask=seed_person)
                 print(f"      Tracking instance {tracked_id} of {n_detected} detected")
             else:
                 mask = merge_masks_from_output(det_out)
+            mask = clean_object_mask(mask, prev_mask, open_px)
             all_masks[chunk_start] = mask
             if mask is not None and mask.any():
                 prev_mask = mask
@@ -234,6 +299,7 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
                     mask = mask_for_obj_id(resp["outputs"], tracked_id)
                 else:
                     mask = merge_masks_from_output(resp["outputs"])
+                mask = clean_object_mask(mask, prev_mask, open_px)
                 all_masks[chunk_start + fi] = mask
                 if mask is not None and mask.any():
                     prev_mask = mask
@@ -524,9 +590,15 @@ def main():
     human_count = sum(1 for m in human_masks.values() if m is not None and m.any())
     print(f"  Human masks found in {human_count}/{num_frames} frames")
 
-    # Segment object (chunked)
-    print(f"Segmenting object: '{args.object_prompt}'...")
-    object_masks = segment_prompt_chunked(predictor, frames, args.object_prompt, args.chunk_size, fps)
+    # Segment object (chunked). One instance near the person by default: the
+    # union of every look-alike in the scene is not a trajectory.
+    print(f"Segmenting object: '{args.object_prompt}' (select={args.object_select}, "
+          f"open={args.object_open}px)...")
+    object_masks = segment_prompt_chunked(
+        predictor, frames, args.object_prompt, args.chunk_size, fps,
+        single_instance=args.object_select != "union",
+        person_masks=human_masks if args.object_select == "near-person" else None,
+        open_px=args.object_open)
     obj_count = sum(1 for m in object_masks.values() if m is not None and m.any())
     print(f"  Object masks found in {obj_count}/{num_frames} frames")
 
