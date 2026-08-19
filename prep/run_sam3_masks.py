@@ -58,12 +58,15 @@ def parse_args():
                              "is the one at their hands -- then held by frame-to-frame "
                              "overlap. 'single' seeds by largest instead; 'union' is the "
                              "old merge-everything behaviour")
-    parser.add_argument("--object_open", type=int, default=3,
+    parser.add_argument("--object_open", type=int, default=0,
                         help="Radius in px of a morphological opening applied to object "
-                             "masks: severs thin attachments (a poured liquid stream, a "
-                             "utensil handle) before keeping one connected component. "
-                             "Guarded: if cleanup would erase most of the mask, the "
-                             "original is kept. 0 disables (default: 3)")
+                             "masks: severs thin attachments before keeping one connected "
+                             "component. OFF by default -- it cannot tell a poured liquid "
+                             "stream from a pot handle, and amputating real thin parts is "
+                             "worse than a transient bleed, which the downstream "
+                             "triangulation residual gate absorbs anyway. Guarded when on: "
+                             "if cleanup would erase most of the mask, the original is "
+                             "kept (default: 0)")
     parser.add_argument("--zoom", action="store_true", default=True,
                         help="Visualization: magnified inset around the object (DEFAULT ON). "
                              "A ball is ~18px in a 796x448 frame; at 1x you cannot tell "
