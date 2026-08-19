@@ -217,6 +217,8 @@ class RefineOutOptimConfig(ContactOptimConfig):
     w_velo: float = 0.0 # weight for velocity loss: object mainly 
     w_init_ot: float = 100.0 # weight for initial object translation 
     w_init_ht: float = 8000.0 # weight for initial human translation, do not allow large human translation changes 
+    w_j3d: float = 0.0 # weight for triangulated 3D joint anchor (needs j3d_file)
+    j3d_file: str = '' # prep/triangulate_human.py npz with joints_cam, the multi-view human anchor
     w_pinit: float = 0 # weight for init pose 
     pen_loss_start: float = 0.6 # start of the pen loss, after this step, the pen loss is disabled 
     batch_size: int = 192

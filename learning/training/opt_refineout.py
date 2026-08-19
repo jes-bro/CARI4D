@@ -283,6 +283,29 @@ class RefineOutOptimizer(BaseBehaveVideoData):
         opt_dict['contact_mask'] = torch.from_numpy(contact_mask).float().to(self.device)
         opt_dict['joints_2d'] = torch.from_numpy(joints_2d).float().to(self.device)
 
+        # Triangulated 3D joints (prep/triangulate_human.py): a metric,
+        # multi-view anchor for the human. Depth along the viewing ray is
+        # invisible to the 2D and silhouette losses, so without this the
+        # human's absolute depth is whatever the monocular fit guessed.
+        if self.cfg.w_j3d > 0:
+            assert self.cfg.j3d_file, 'w_j3d > 0 needs j3d_file (prep/triangulate_human.py output)'
+            j3d_npz = np.load(self.cfg.j3d_file, allow_pickle=True)
+            assert 'joints_cam' in j3d_npz, 'j3d_file lacks joints_cam; rerun triangulate_human.py with --to_cam'
+            j3d_map = {int(f): i for i, f in enumerate(j3d_npz['frames'])}
+            fids = [int(str(x).split('/')[-1].split('-')[0]) for x in frames_pr]
+            n_j = j3d_npz['joints_cam'].shape[1]
+            assert n_j == joints_2d.shape[1], f'j3d has {n_j} joints, 2d has {joints_2d.shape[1]}'
+            j3d = np.zeros((len(fids), n_j, 3))
+            j3d_valid = np.zeros((len(fids), n_j))
+            for i, f in enumerate(fids):
+                if f in j3d_map:
+                    j3d[i] = j3d_npz['joints_cam'][j3d_map[f]]
+                    j3d_valid[i] = j3d_npz['valid'][j3d_map[f]].astype(float)
+            opt_dict['j3d'] = torch.from_numpy(j3d).float().to(self.device)
+            opt_dict['j3d_valid'] = torch.from_numpy(j3d_valid).float().to(self.device)
+            print(f"Using triangulated 3D joint anchor {self.cfg.j3d_file}: "
+                  f"{int((j3d_valid.sum(1) > 0).sum())}/{len(fids)} frames anchored, w_j3d={self.cfg.w_j3d}")
+
         # 2D masks and occlusion masks 
         if not self.cfg.wild_video:
             K_full = get_intrinsics_unified(self.cfg.data_source, seq_name, view_id, self.cfg.wild_video)
@@ -399,8 +422,15 @@ class RefineOutOptimizer(BaseBehaveVideoData):
             # 2D projection loss on SMPL joints: get 25 body joints 
             t0 = time.time()
             loss_j2d = torch.tensor(0, device=self.device)
-            if self.cfg.w_j2d > 0:
+            loss_j3d = torch.tensor(0, device=self.device)
+            if self.cfg.w_j2d > 0 or self.cfg.w_j3d > 0:
                 joints_25_3d = self.landmark.get_body_kpts_batch_torch(smplh_output.vertices)
+            if self.cfg.w_j3d > 0:
+                # camera-frame MSE against the triangulated joints, per-joint gated
+                j3d_valid = opt_dict['j3d_valid'][start_ind:end_ind]
+                loss_j3d = (F.mse_loss(joints_25_3d, opt_dict['j3d'][start_ind:end_ind],
+                                       reduction='none').sum(-1) * j3d_valid).mean() * self.cfg.w_j3d
+            if self.cfg.w_j2d > 0:
                 joints_25_proj = joints_25_3d @ K_full_th.T
                 joints_25_proj_xy = joints_25_proj[:, :, :2] / joints_25_proj[:, :, 2:3]  
                 j2d_conf = opt_dict['joints_2d'][start_ind:end_ind, :, 2:3]
@@ -472,7 +502,7 @@ class RefineOutOptimizer(BaseBehaveVideoData):
             if self.cfg.w_pinit > 0:
                 loss_init_p = F.mse_loss(opt_dict['smpl_pose_orig'][start_ind:end_ind], opt_dict['smpl_pose_body'][start_ind:end_ind], reduction='none').sum(-1).mean() * self.cfg.w_pinit
             # compute the total loss 
-            loss = loss_j2d + loss_contact + loss_sil + loss_pen + loss_temp + loss_velo + loss_init_ot + loss_init_ht + loss_init_p
+            loss = loss_j2d + loss_j3d + loss_contact + loss_sil + loss_pen + loss_temp + loss_velo + loss_init_ot + loss_init_ht + loss_init_p
 
             loss.backward()
             optimizer.step()
@@ -485,6 +515,7 @@ class RefineOutOptimizer(BaseBehaveVideoData):
                 wandb.log({
                     'loss_j2d': loss_j2d.item(),
                     'loss_contact': loss_contact.item(),
+                    'loss_j3d': loss_j3d.item() if torch.is_tensor(loss_j3d) else float(loss_j3d),
                     'loss_sil': loss_sil.item(),
                     'loss_pen': loss_pen,
                     'loss_temp': loss_temp.item(),
