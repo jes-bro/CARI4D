@@ -361,6 +361,8 @@ class RefineOutOptimizer(BaseBehaveVideoData):
             train_state = pr['train_state']
             print(f'Loaded optimizer and scheduler from checkpoint {ckpt_file}')
         seq_len, batch_size = len(obj_axis), self.cfg.batch_size
+        print('cfg batch size:', self.cfg.batch_size)
+        batch_size = batch_size // 2
         seq_len = debug_len if self.cfg.debug else seq_len
         batch_size = seq_len if batch_size >= seq_len else batch_size
         self.cfg.batch_size = batch_size
@@ -655,6 +657,7 @@ class RefineOutOptimizer(BaseBehaveVideoData):
                 
                 vw.close()
                 print(f"Visualization saved to {video_file_out} done")
+                torch.cuda.empty_cache()
 
             
         if not self.cfg.no_wandb:

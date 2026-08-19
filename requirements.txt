@@ -68,7 +68,6 @@ fastjsonschema==2.21.1
 ffmpeg-python==0.2.0
 ffmpy==1.0.0
 filelock==3.13.1
-flash_attn==2.4.3.post1
 Flask==3.1.1
 flatbuffers==25.2.10
 fonttools==4.61.1

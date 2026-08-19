@@ -461,7 +461,7 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
     optional magnified inset around the object.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    writer = imageio.get_writer(output_path, fps=fps)
+    writer = imageio.get_writer(output_path, format='FFMPEG', fps=fps)
 
     shape = frames[0].shape[:2]
     n = len(frames)
@@ -547,8 +547,8 @@ def main():
     args = parse_args()
 
     # Set HF token
-    hf_token = args.hf_token or os.environ.get("HF_TOKEN")
-    os.environ["HF_TOKEN"] = hf_token
+    hf_token = "" # args.hf_token or os.environ.get("HF_TOKEN")
+    os.environ["HF_TOKEN"] = ""
     assert hf_token is not None, "HF_TOKEN is not set"
 
     # Derive paths

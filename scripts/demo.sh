@@ -1,7 +1,7 @@
 video=data/cari4d-demo/behave/videos/Date03_Sub03_chairblack_lift.2.color.mp4
 
 set -e
-
+cd /simurgh2/projects/ret-hoi/CARI4D/
 # Step 1: run Unidepth estimation
 python prep/unidepth_behave.py --cameras 2 --data_source behave -o data/cari4d-demo/behave/videos/  --video ${video}
 
