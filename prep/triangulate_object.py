@@ -76,6 +76,12 @@ def parse_args():
     parser.add_argument("--height", type=int, required=True,
                         help="reference height, paired with --width")
     parser.add_argument("--kid", type=int, default=0, help="camera id in the mask keys")
+    parser.add_argument("--mask", choices=["object", "person"], default="object",
+                        help="which mask to triangulate. 'person' is the calibration "
+                             "smoke test: the person is the one instance every view "
+                             "certainly shares, so if the person's centroid does not "
+                             "triangulate to a few px, the calibration or offsets are "
+                             "wrong and no object mask can ever agree (default: object)")
     parser.add_argument("--frame_offset", action="append", default=None,
                         help="per-view frame offset, same order as --view, for clips "
                              "trimmed to different ranges (default: 0 for every view)")
@@ -173,7 +179,8 @@ def quaternion_to_matrix(q):
     ])
 
 
-def load_object_centroids(masks_root, seq_name, kid, min_px):
+def load_object_centroids(masks_root, seq_name, kid, min_px,
+                          mask_suffix="obj_rend_mask.png"):
     """Return ({frame index: (u, v, pixel count)}, (H, W)) for the object masks.
 
     The centroid of a sphere's silhouette is its projected centre, so for a ball
@@ -198,7 +205,7 @@ def load_object_centroids(masks_root, seq_name, kid, min_px):
                              f"found {list(f.keys())}")
         group = f[seq_name]
         for key in group:
-            if not key.endswith(f"-k{kid}.obj_rend_mask.png"):
+            if not key.endswith(f"-k{kid}.{mask_suffix}"):
                 continue
             mask = group[key][:]
             if shape is None:
@@ -332,8 +339,9 @@ def main():
         if len(parts) != 3:
             raise SystemExit(f"ERROR: --view must be <cam_uid>:<masks_root>:<seq>, got {spec}")
         uid, masks_root, seq = parts
+        suffix = "person_mask.png" if args.mask == "person" else "obj_rend_mask.png"
         centroids, (mask_h, mask_w) = load_object_centroids(
-            masks_root, seq, args.kid, args.min_px)
+            masks_root, seq, args.kid, args.min_px, mask_suffix=suffix)
         if (mask_w, mask_h) not in cams_by_res:
             cams_by_res[(mask_w, mask_h)] = read_calibration(args.calib, mask_w, mask_h)
         cams = cams_by_res[(mask_w, mask_h)]
