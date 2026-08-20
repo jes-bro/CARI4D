@@ -85,7 +85,7 @@ def main():
                for f, p in zip(tri["frames"].astype(int), tri["xyz"])}
 
     print(f"{'frame':>6} {'hand':>5} {'hand_d':>8} {'ball_d':>8} {'gap_m':>8} "
-          f"{'recon_obj_d':>12} {'wrist-ball_m':>13}")
+          f"{'recon_obj_d':>12} {'Lwrist-ball':>12} {'Rwrist-ball':>12}")
     gaps = []
     for i, f in enumerate(frames):
         if f < args.lo or f > args.hi or f not in tri_cam:
@@ -101,7 +101,7 @@ def main():
         gap = hand_d - ball_d
         gaps.append(gap)
         print(f"{f:>6} {hand:>5} {hand_d:>8.3f} {ball_d:>8.3f} {gap:>8.3f} "
-              f"{np.linalg.norm(obj_cam[i]):>12.3f} {w_dists.min():>13.3f}")
+              f"{np.linalg.norm(obj_cam[i]):>12.3f} {w_dists[0]:>12.3f} {w_dists[1]:>12.3f}")
 
     if not gaps:
         print("no frames with both a reconstruction and a triangulated point in the window")
