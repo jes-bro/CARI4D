@@ -60,6 +60,7 @@ save_name="${SAVE_NAME:-optv2}"
 extra="${EXTRA:-}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
+log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "pth_file=${PTH_FILE}"
 log "video_root=${video_root}  masks_root=${masks_root}  packed_root=${packed_root}  hy3d_root=${hy3d_root}"
 log "save_name=${save_name}  extra='${extra}'"

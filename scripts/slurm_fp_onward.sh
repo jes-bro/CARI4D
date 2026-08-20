@@ -83,6 +83,7 @@ depth_human_band="${DEPTH_HUMAN_BAND:-0.0}"
 depth_mad_k="${DEPTH_MAD_K:-0.0}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none}"
+log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "video=$video (aligned)  env=${CONDA_DEFAULT_ENV:-none}"
 log "masks_root=${masks_root}  packed_root=${packed_root}  hy3d_root=${hy3d_root}"
 log "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
