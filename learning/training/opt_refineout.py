@@ -357,7 +357,7 @@ class RefineOutOptimizer(BaseBehaveVideoData):
         opt_dict['image_refs'] = image_refs
         opt_dict['K_rois'] = K_rois
 
-        symmetric_objects = ['boxlong', 'boxlarge', 'boxmedium', 'boxsmall', 'boxtiny', 'yogamat', 
+        symmetric_objects = ['bball', 'boxlong', 'boxlarge', 'boxmedium', 'boxsmall', 'boxtiny', 'yogamat', 
                     # 'stool',  'trashbin', 'plasticcontainer', 'tablesquare', 'suitcase', 'backpack', 
                      'obj02', 'obj04', 'obj05', 'obj06']
         is_symmetric = seq_name.split('_')[2] in symmetric_objects # for these the object temporal smoothness is different 
