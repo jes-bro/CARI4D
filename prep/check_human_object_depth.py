@@ -84,7 +84,7 @@ def main():
     tri_cam = {int(f): R_wc.T @ (p - t_wc)
                for f, p in zip(tri["frames"].astype(int), tri["xyz"])}
 
-    print(f"{'frame':>6} {'hand_d':>8} {'ball_d':>8} {'gap_m':>8} "
+    print(f"{'frame':>6} {'hand':>5} {'hand_d':>8} {'ball_d':>8} {'gap_m':>8} "
           f"{'recon_obj_d':>12} {'wrist-ball_m':>13}")
     gaps = []
     for i, f in enumerate(frames):
@@ -94,11 +94,13 @@ def main():
         ball_d = float(np.linalg.norm(ball))
         # The wrist nearer the ball is the one plausibly holding it.
         w_dists = np.linalg.norm(wrists[i] - ball, axis=1)
-        w = wrists[i][int(np.argmin(w_dists))]
+        which = int(np.argmin(w_dists))
+        hand = "L" if which == 0 else "R"   # WRISTS = (20 left, 21 right)
+        w = wrists[i][which]
         hand_d = float(np.linalg.norm(w))
         gap = hand_d - ball_d
         gaps.append(gap)
-        print(f"{f:>6} {hand_d:>8.3f} {ball_d:>8.3f} {gap:>8.3f} "
+        print(f"{f:>6} {hand:>5} {hand_d:>8.3f} {ball_d:>8.3f} {gap:>8.3f} "
               f"{np.linalg.norm(obj_cam[i]):>12.3f} {w_dists.min():>13.3f}")
 
     if not gaps:
