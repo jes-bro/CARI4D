@@ -36,10 +36,39 @@ from collections import defaultdict
 
 sys.path.append(os.getcwd())
 
-DEFAULT_TAKES_JSON = os.path.expanduser('~/egoexo4d/takes.json')
 # The take already reconstructed: Date03_Sub01_bball_dribble came out of this
 # one (cam04, frames 354-454). Everything is ranked relative to it.
 DEFAULT_ANCHOR = 'unc_basketball_03-31-23_02_9'
+
+
+def resolve_takes_json(explicit, takes_root):
+    """Find takes.json, or raise naming every path that was tried.
+
+    The metadata does not live in a fixed place across machines: it sits beside
+    the takes/ directory in an egoexo4d download, which is a different root on
+    a workstation and on shared cluster storage. So an explicit path wins, then
+    the environment, then the sibling of whatever --takes_root was given, then
+    the download layout under $HOME.
+    """
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    if os.environ.get('EGOEXO_TAKES_JSON'):
+        candidates.append(os.environ['EGOEXO_TAKES_JSON'])
+    if takes_root:
+        # <root>/takes/ -> <root>/takes.json, and the root itself for a layout
+        # that keeps the metadata inside.
+        candidates.append(os.path.join(os.path.dirname(takes_root.rstrip('/')),
+                                       'takes.json'))
+        candidates.append(os.path.join(takes_root, 'takes.json'))
+    candidates.append(os.path.expanduser('~/egoexo4d/takes.json'))
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(
+        'could not find takes.json. Tried:\n  ' + '\n  '.join(candidates) +
+        '\nPass --takes_json, or set EGOEXO_TAKES_JSON.')
 
 
 def load_takes(takes_json):
@@ -207,8 +236,9 @@ def main():
     """Parse arguments, group the takes and print (optionally dump) the report."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--takes_json', default=DEFAULT_TAKES_JSON,
-                        help='EgoExo4D takes.json (default: %(default)s)')
+    parser.add_argument('--takes_json', default=None,
+                        help='EgoExo4D takes.json. Default: $EGOEXO_TAKES_JSON, '
+                             'then next to --takes_root, then ~/egoexo4d/takes.json')
     parser.add_argument('--anchor', default=DEFAULT_ANCHOR,
                         help='take name the tiers are measured against (default: %(default)s)')
     parser.add_argument('--tier', type=int, action='append', dest='tiers',
@@ -222,10 +252,16 @@ def main():
     parser.add_argument('--json', default=None, help='also write the selection here')
     args = parser.parse_args()
 
-    takes = load_takes(args.takes_json)
+    try:
+        takes_json = resolve_takes_json(args.takes_json, args.takes_root)
+    except FileNotFoundError as err:
+        parser.error(str(err))
+    print(f'metadata: {takes_json}')
+
+    takes = load_takes(takes_json)
     by_name = {t['take_name']: t for t in takes}
     if args.anchor not in by_name:
-        parser.error(f'anchor take {args.anchor} not in {args.takes_json}')
+        parser.error(f'anchor take {args.anchor} not in {takes_json}')
     anchor = by_name[args.anchor]
 
     tiers = set(args.tiers) if args.tiers else {0, 1, 2}
