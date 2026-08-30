@@ -32,13 +32,23 @@ Each --view is <cam_uid>:<masks_root>:<sequence_name>. Each mask set's
 resolution is read from its own H5 (a stored mask is an (H, W) array) and the
 calibration is scaled per view to match, so mask sets of different resolutions
 are simply different observations of the same geometry. The same camera may
-appear in several --view entries (say a 448p and a 4K mask set): per frame the
-camera contributes exactly one of them -- two observations from one camera
-share a ray origin and add no 3D information -- and the one kept is whichever
-agrees best with the other cameras, measured by the same reprojection residual
-used to accept or reject the frame. Residuals are always expressed in
---width-scale pixels, whatever resolution the masks came from, so
---max_residual means one thing.
+appear in several --view entries (say a 448p and a 4K mask set); per frame the
+camera contributes exactly one of them, since two observations from one camera
+share a ray origin and add no 3D information.
+
+Per frame, the views are not all believed. A mask that has latched onto the
+wrong thing does not merely blur a least-squares fit over every view -- it
+drags the point, inflates the residual and costs the whole frame once
+--max_residual rejects it, and a lost frame falls back to the monocular depth
+this exists to replace. So each frame keeps the LARGEST subset of views that
+agree on a single point, meaning the point reprojects into every member within
+--inlier_px, with the lowest mean error breaking ties. Frames where no subset
+agrees keep their honest large residual and are still thrown out by
+--max_residual. The report prints how often each view made the consensus, which
+is how you tell a camera worth masking from one worth dropping.
+
+Residuals are always expressed in --width-scale pixels, whatever resolution the
+masks came from, so --max_residual and --inlier_px mean one thing.
 """
 import argparse
 import csv
@@ -95,6 +105,11 @@ def parse_args():
                         help="drop frames whose mean reprojection error exceeds this many "
                              "pixels; large residuals mean the views are not looking at "
                              "the same object (default: 10.0)")
+    parser.add_argument("--inlier_px", type=float, default=4.0,
+                        help="a view joins the consensus only if the agreed point "
+                             "reprojects into it within this many pixels. Set it above "
+                             "--max_residual to disable consensus and use every view that "
+                             "saw the object, which is what this did before (default: 4.0)")
     # The ego view is added separately because its pose changes every frame,
     # while a GoPro is bolted down and has one. It is also the view most worth
     # having: metres from the ball rather than tens, with no legs between it and
@@ -261,6 +276,73 @@ def triangulate_rays(origins, directions):
     return point, float(np.mean(dists))
 
 
+def score_combo(combo):
+    """Triangulate one choice of observations and score how well they agree.
+
+    Returns (point, ray gap in metres, mean reprojection px, worst reprojection
+    px). The mean is what gets reported; the worst is what decides membership,
+    because a single badly-tracked view hides inside a mean of four.
+    """
+    point, spread = triangulate_rays([c["o"] for c in combo],
+                                     [c["d"] for c in combo])
+    errs = [reprojection_error(point, c["uv"], c["cam"]) * c["scale"] for c in combo]
+    return point, spread, float(np.mean(errs)), float(np.max(errs))
+
+
+def best_consensus(by_uid, uid_order, min_views, inlier_px, max_combos=512):
+    """Pick the largest set of views that agree on one point, and triangulate it.
+
+    Every view that saw the object used to go into a single least-squares fit,
+    so a view whose mask had latched onto something else did not get ignored --
+    it dragged the estimate, inflated the residual, and cost the WHOLE FRAME
+    when --max_residual rejected it. Losing frames is not a cosmetic penalty:
+    inject_object_depth.py leaves uncovered frames on monocular depth, which is
+    the depth triangulation exists to replace.
+
+    So instead: try each subset, keep the ones where the agreed point reprojects
+    into every member within inlier_px, and prefer the largest such subset
+    (lowest mean error breaking ties). More agreeing views is better geometry,
+    so size is ranked ahead of error rather than the reverse.
+
+    A camera contributes at most one observation, since two mask sets from one
+    camera share a ray origin and add no 3D information -- so the search is over
+    "which mask set, or none" per camera. With four cameras and two mask sets
+    each that is 81 combinations, which is why this enumerates rather than
+    sampling: exhaustive is exact, deterministic, and still trivial.
+
+    Returns a dict with xyz/spread/residual/worst/views, or None when fewer than
+    min_views observations exist at all. When NO subset reaches consensus the
+    best-scoring subset is returned anyway, with its honest (large) residual, so
+    --max_residual still throws the frame out -- that is the "no agreement
+    anywhere" case, and it should look like one in the report.
+    """
+    # None = this camera sits this frame out.
+    options = [by_uid[u] + [None] for u in uid_order]
+    n_combos = int(np.prod([len(o) for o in options]))
+    if n_combos > max_combos:
+        # Degenerate fallback: every camera's first mask set, no subsetting.
+        candidates = [tuple(by_uid[u][0] for u in uid_order)]
+    else:
+        candidates = itertools.product(*options)
+
+    best_inlier, best_any = None, None
+    for combo in candidates:
+        combo = tuple(c for c in combo if c is not None)
+        if len(combo) < min_views:
+            continue
+        point, spread, mean_err, worst_err = score_combo(combo)
+        row = {"xyz": point, "spread": spread, "residual": mean_err,
+               "worst": worst_err, "views": [c["label"] for c in combo]}
+        # Ranked by size first, then agreement -- see the docstring.
+        key = (len(combo), -mean_err)
+        if worst_err <= inlier_px:
+            if best_inlier is None or key > (len(best_inlier["views"]), -best_inlier["residual"]):
+                best_inlier = row
+        if best_any is None or mean_err < best_any["residual"]:
+            best_any = row
+    return best_inlier or best_any
+
+
 def reprojection_error(point, uv, cam):
     """Reproject a world point into a view and return the pixel error.
 
@@ -391,27 +473,14 @@ def main():
         if len(by_uid) < args.min_views:
             skipped += 1
             continue
-        # Which mask set is best for a camera on this frame is decided by the
-        # geometry: try the combinations and keep the one whose triangulation
-        # the contributing views agree on most, in reference-scale pixels.
-        # The combination count is tiny (mask sets per camera is 2 or 3), but
-        # cap it anyway and fall back to first-listed rather than blow up.
-        n_combos = int(np.prod([len(by_uid[u]) for u in uid_order]))
-        if n_combos > 256:
-            combos = [tuple(by_uid[u][0] for u in uid_order)]
-        else:
-            combos = itertools.product(*(by_uid[u] for u in uid_order))
-        best = None
-        for combo in combos:
-            point, spread = triangulate_rays([c["o"] for c in combo],
-                                             [c["d"] for c in combo])
-            errs = [reprojection_error(point, c["uv"], c["cam"]) * c["scale"]
-                    for c in combo]
-            mean_err = float(np.mean(errs))
-            if best is None or mean_err < best["residual"]:
-                best = {"frame": idx, "xyz": point, "spread": spread,
-                        "residual": mean_err,
-                        "views": [c["label"] for c in combo]}
+        # Which views to believe on this frame is decided by the geometry, not
+        # by the caller: the largest subset that agrees on one point wins, and a
+        # view tracking the wrong thing is left out instead of dragging the fit.
+        best = best_consensus(by_uid, uid_order, args.min_views, args.inlier_px)
+        if best is None:
+            skipped += 1
+            continue
+        best["frame"] = idx
         rows.append(best)
 
     if not rows:
@@ -427,6 +496,20 @@ def main():
         counts[len(r["views"])] = counts.get(len(r["views"]), 0) + 1
     print("  views per frame                : "
           + ", ".join(f"{n} views x{c}" for n, c in sorted(counts.items())))
+
+    # Which views the consensus actually believed, and how well. This is the
+    # answer to "is that fourth camera earning its 4K SAM3 job" -- a view that
+    # is in the consensus on a handful of frames is one to drop from --view,
+    # and it costs nothing to read here rather than by re-running subsets.
+    used = {}
+    for r in rows:
+        for label in r["views"]:
+            used[label] = used.get(label, 0) + 1
+    print("  frames each view was believed  :")
+    for v in views:
+        n = used.get(v["label"], 0)
+        share = 100.0 * n / len(rows) if rows else 0.0
+        print(f"      {v['label']:<28} {n:>5}/{len(rows)} ({share:5.1f}%)")
 
     good = [r for r in rows if r["residual"] <= args.max_residual]
     print()
