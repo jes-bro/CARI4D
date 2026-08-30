@@ -63,10 +63,23 @@ packed_root="${PACKED_ROOT:?set PACKED_ROOT}"
 hy3d_root="${HY3D_ROOT:?set HY3D_ROOT}"
 nlf_path="${NLF_PATH:?set NLF_PATH}"
 
+# behave_data.const.get_hy3d_mesh_file falls back to $HY3D_MESHES_ROOT when no
+# root is threaded through, and step 4 goes through it: align_monod2hum calls
+# load_smpl_obj_uvmap(use_hy3d=True), which SystemExits if no mesh is found --
+# before `hum_only=True` discards the object mesh it just insisted on. So the
+# lookup has to succeed even though the result is unused.
+#
+# demo-custom.sh never sets this because the released demo's meshes sit under
+# the default root. A per-sequence mesh directory does not, so it is set here.
+# The non-metric root is right: step 5.1 has not run yet, so -metric does not
+# exist, and the mesh is discarded anyway.
+export HY3D_MESHES_ROOT="${HY3D_MESHES_ROOT:-$HY3D_ROOT}"
+
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "video=$video"
 log "masks_root=$masks_root  packed_root=$packed_root  hy3d_root=$hy3d_root  nlf_path=$nlf_path"
+log "hy3d_meshes_root=$HY3D_MESHES_ROOT"
 
 python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda ok:', torch.cuda.get_device_name(0))"
 command -v ffprobe >/dev/null || { echo "ERROR: ffprobe not found" >&2; exit 1; }
