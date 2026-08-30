@@ -82,6 +82,16 @@ reinit_every="${REINIT_EVERY:-}"
 depth_human_band="${DEPTH_HUMAN_BAND:-0.0}"
 depth_mad_k="${DEPTH_MAD_K:-0.0}"
 
+# Step 7's own knobs. Defaults reproduce demo-custom.sh exactly, so an existing
+# invocation is unaffected. They exist so the multi-view human anchor
+# (w_j3d / j3d_file from prep/triangulate_human.py) can be applied in this job
+# instead of re-running the optimizer afterwards through slurm_opt_only.sh --
+# on a batch of takes that second optimization is the single largest piece of
+# duplicated GPU time. Give SAVE_NAME a fresh value per variant or output/opt
+# overwrites the previous run.
+save_name="${SAVE_NAME:-optv2}"
+opt_extra="${OPT_EXTRA:-}"
+
 log "host=$(hostname) job=${SLURM_JOB_ID:-none}"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "video=$video (aligned)  env=${CONDA_DEFAULT_ENV:-none}"
@@ -89,6 +99,7 @@ log "masks_root=${masks_root}  packed_root=${packed_root}  hy3d_root=${hy3d_root
 log "nlf_path=${nlf_path}  fp_root=${fp_root}  coconet_out=${coconet_out}"
 log "exp=${exp_name}+${exp_step}${identifier}  zfar=${zfar}  tstart=${tstart}  erode_depth_thres=${erode_depth_thres}  reinit_every=${reinit_every:-never}"
 log "depth_human_band=${depth_human_band}  depth_mad_k=${depth_mad_k}"
+log "save_name=${save_name}  opt_extra='${opt_extra}'"
 
 python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda ok:', torch.cuda.get_device_name(0))"
 
@@ -118,14 +129,16 @@ nlf_root=${nlf_path}-opt \
 video=${video}  cam_id=0 wild_video=True \
 outpath=${coconet_out}
 
-# Step 7: joint optimisation (verbatim from demo-custom.sh).
-python learning/training/opt_refineout.py num_steps=3000 w_acc_v=600 w_contact=300  save_name=optv2 batch_size=64 opt_rot=True \
+# Step 7: joint optimisation (demo-custom.sh's, with save_name and a trailing
+# override slot). OmegaConf's CLI is last-key-wins, so ${opt_extra} unquoted at
+# the end overrides any weight above it.
+python learning/training/opt_refineout.py num_steps=3000 w_acc_v=600 w_contact=300  save_name=${save_name} batch_size=64 opt_rot=True \
 opt_trans=True w_temp=1000 w_sil=0.002 w_contact=200.0 w_pen=2.0 w_j2d=0.006 opt_smpl_trans=False opt_betas=False  \
 pth_file=${coconet_out}/${exp_name}+${exp_step}${identifier}/${video_prefix}.pth  wild_video=True use_input=True \
 video_root=$(dirname "$video") \
 packed_root=${packed_root} \
 masks_root=${masks_root}  \
-hy3d_meshes_root=${hy3d_root}-metric outpath=output/opt
+hy3d_meshes_root=${hy3d_root}-metric outpath=output/opt ${opt_extra}
 
 log "results:"
 ls -la "output/opt"/*"${identifier}"* 2>/dev/null || ls -la output/opt 2>/dev/null || true

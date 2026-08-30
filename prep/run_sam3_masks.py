@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -96,6 +97,11 @@ def parse_args():
                              "to reject a few-pixel spurious blob")
     parser.add_argument("--trim_rank", type=int, default=1,
                         help="Take the Nth longest run (1 = longest)")
+    parser.add_argument("--window_json", default=None,
+                        help="Also write the chosen window to this JSON. The trim range is "
+                             "otherwise only printed, and prep/find_trim_offset.py exists "
+                             "because that log gets lost -- a driver script cutting the aux "
+                             "views to the same frames needs the numbers, not the log")
     return parser.parse_args()
 
 
@@ -367,6 +373,41 @@ def mask_areas(human_masks, object_masks, num_frames, shape):
     per = np.array([_mask_or_empty(human_masks, i, shape).sum() for i in range(num_frames)])
     obj = np.array([_mask_or_empty(object_masks, i, shape).sum() for i in range(num_frames)])
     return per, obj
+
+
+def save_window_json(path, seq_name, source_video, runs, good, num_frames, fps,
+                     chosen):
+    """Record which frames of the source take this run selected.
+
+    `chosen` is the (lo, hi) actually trimmed to, or None when nothing was
+    trimmed. The other runs are kept too: when the top run is unusably short,
+    the next ones are what you would retry with --trim_rank, and a driver
+    script should not have to re-run SAM3 to see them.
+
+    Frame numbers are indices into the video that was masked, which is the
+    source take when SAM3 ran over a whole take.
+    """
+    payload = {
+        "seq": seq_name,
+        "source_video": os.path.abspath(source_video),
+        "num_frames": int(num_frames),
+        "fps": float(fps),
+        "both_masks_frames": int(good.sum()),
+        "both_masks_frac": float(good.mean()) if num_frames else 0.0,
+        "runs": [{"lo": int(lo), "hi": int(hi), "n_frames": int(hi - lo + 1),
+                  "covered_frac": float(good[lo:hi + 1].mean())}
+                 for lo, hi in runs],
+        "chosen": None,
+    }
+    if chosen is not None:
+        lo, hi = chosen
+        payload["chosen"] = {"lo": int(lo), "hi": int(hi),
+                             "n_frames": int(hi - lo + 1),
+                             "covered_frac": float(good[lo:hi + 1].mean())}
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=1)
+    print(f"Wrote window to {path}")
 
 
 def find_tracked_runs(good, gap_tolerance=0):
@@ -645,6 +686,9 @@ def main():
         print(f"\nTrimming to run #{args.trim_rank}: source frames {lo}-{hi} "
               f"({hi - lo + 1} frames, {(hi - lo + 1) / fps:.1f}s, "
               f"both masks present in {100 * covered:.1f}% of them)")
+        if args.window_json:
+            save_window_json(args.window_json, seq_name, args.video, runs, good,
+                             num_frames, fps, (lo, hi))
         save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
                      args.output_dir, fps=fps)
     else:
@@ -659,6 +703,12 @@ def main():
             print("visualization, then retry with different prompts or a larger "
                   "--trim_gap_tolerance.", file=sys.stderr)
             print("!" * 72 + "\n", file=sys.stderr)
+        if args.window_json:
+            # Still written, with chosen=null: a driver that fans out over many
+            # takes needs to see which ones produced no usable window without
+            # opening every job log.
+            save_window_json(args.window_json, seq_name, args.video, runs, good,
+                             num_frames, fps, None)
         save_masks_h5(human_masks, object_masks, h5_path, seq_name, args.kid,
                       frames[0].shape)
 

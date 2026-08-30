@@ -39,6 +39,15 @@ VIDEO="${VIDEO:-/vision/group/egoexo4d/takes/unc_basketball_03-31-23_02_9/frame_
 HUMAN="${HUMAN:-one basketball player playing basketball}"
 OBJECT="${OBJECT:-ball}"
 
+# Where the masks land. The flat default is fine for one sequence at a time;
+# a batch of takes needs a directory each, because the aux clips are named for
+# their camera (cam01-4k) and would otherwise collide between takes.
+OUT_DIR="${OUT_DIR:-/simurgh2/projects/ret-hoi/CARI4D/sam3masks}"
+
+# Optional: record the trimmed window as JSON so the aux views can be cut to
+# the same frames by a job queued before the window is known.
+WINDOW_JSON="${WINDOW_JSON:-}"
+
 # ---- HF cache -> project space, NOT quota'd home. Also where sam3.pt lands:
 #      $HF_HOME/hub/models--facebook--sam3/snapshots/<sha>/sam3.pt
 export HF_HOME="${HF_HOME:-/simurgh2/projects/ret-hoi/hf_cache}"
@@ -61,6 +70,7 @@ conda activate "${SAM3_ENV:-sam3}"
 
 echo "[sam3] host=$(hostname) job=${SLURM_JOB_ID:-<none>} gpu=$CUDA_VISIBLE_DEVICES"
 echo "[sam3] video=$VIDEO"
+echo "[sam3] out_dir=$OUT_DIR  window_json=${WINDOW_JSON:-<none>}"
 echo "[sam3] human='$HUMAN' object='$OBJECT'  HF_HOME=$HF_HOME"
 echo "[sam3] chunk=${CHUNK:-300} trim=$([ -n "${NO_TRIM:-}" ] && echo off || echo on)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
@@ -76,9 +86,10 @@ python -u /simurgh2/projects/ret-hoi/CARI4D/prep/run_sam3_masks.py \
     --video "$VIDEO" \
     --human_prompt "$HUMAN" \
     --object_prompt "$OBJECT" \
-    --output_dir "/simurgh2/projects/ret-hoi/CARI4D/sam3masks" \
+    --output_dir "$OUT_DIR" \
     --chunk_size "${CHUNK:-300}" \
     ${NO_TRIM:+--no_trim} \
+    ${WINDOW_JSON:+--window_json "$WINDOW_JSON"} \
     --visualize
 
 echo "[sam3] done."

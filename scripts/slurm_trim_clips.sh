@@ -28,14 +28,35 @@
 #   OUT_DIR=sam3masks/trimmed_vids SUFFIX=-4k CAMS="cam01 cam02 cam03 cam04" \
 #       sbatch scripts/slurm_trim_clips.sh
 #
+# Or, when the window comes from the pipeline camera's SAM3 trim rather than
+# from you, name the file it was written to instead of START/END:
+#
+#   WINDOW_JSON=work/<seq>/window.json SRC_DIR=... sbatch scripts/slurm_trim_clips.sh
+#
 # Output naming: <OUT_DIR>/<cam><SUFFIX>.0.color.mp4 -- the .0.color.mp4
 # convention is what run_sam3_masks.py parses the sequence name from.
 
 set -euo pipefail
 
 SRC_DIR=${SRC_DIR:?set SRC_DIR to the take frame_aligned_videos dir}
-START=${START:?set START to the first take frame of the window}
-END=${END:?set END to the last take frame of the window (inclusive)}
+
+# WINDOW_JSON is the alternative to spelling START/END out: run_sam3_masks.py
+# --window_json writes the window it trimmed the pipeline camera to, and the aux
+# views must be cut to exactly those frames. Reading the file here is what lets
+# this job be queued with --dependency=afterok BEFORE the window is known.
+# Explicit START/END still win, so nothing about the old invocation changes.
+WINDOW_JSON=${WINDOW_JSON:-}
+if [ -n "$WINDOW_JSON" ] && { [ -z "${START:-}" ] || [ -z "${END:-}" ]; }; then
+    [ -f "$WINDOW_JSON" ] || { echo "[trim] ERROR: no window at $WINDOW_JSON" >&2; exit 1; }
+    # MIN_FRAMES is the fail-fast: this job is queued ahead of the 4K SAM3 runs
+    # on the aux views, so a window too short to reconstruct should stop the
+    # chain here rather than after three more GPU jobs. 60 frames is 2s.
+    read -r START END < <(python3 -c "import json,sys; w=json.load(open(sys.argv[1]))['chosen']; sys.exit('no usable window (chosen=null)') if w is None else (sys.exit('window %d-%d is %d frames, under MIN_FRAMES=%s' % (w['lo'], w['hi'], w['n_frames'], sys.argv[2])) if w['n_frames'] < int(sys.argv[2]) else print(w['lo'], w['hi']))" "$WINDOW_JSON" "${MIN_FRAMES:-60}")
+    echo "[trim] window from $WINDOW_JSON: ${START}-${END}"
+fi
+
+START=${START:?set START to the first take frame of the window (or WINDOW_JSON)}
+END=${END:?set END to the last take frame of the window, inclusive (or WINDOW_JSON)}
 OUT_DIR=${OUT_DIR:-sam3masks/trimmed_vids}
 SUFFIX=${SUFFIX:--4k}
 CAMS=${CAMS:-cam01 cam02 cam03 cam04}
