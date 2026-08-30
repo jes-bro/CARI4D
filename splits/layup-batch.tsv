@@ -1,38 +1,44 @@
-# take	seq	participant	drill	duration_sec
+# take	seq	participant	drill	duration_sec	pipe_cam
+# pipe_cam is per CAPTURE (the exo rig is fixed within a session and
+# re-placed between them). unc is pinned to cam04: the camera the verified
+# dribble reconstruction used, overriding EgoExo4D's best_exo of cam01.
+# uniandes and sfu follow best_exo (cam03) until someone looks at them.
+# Aux cameras are every other exo cam -- mask all of them; triangulation
+# picks which to believe per frame.
 # Sub slot picks the SMPL body gender via behave_data.const._sub_gender:
 #   Sub01=387 unc male, Sub02=388 unc male, Sub06=322 uniandes female,
 #   Sub03=563 sfu -- EgoExo4D records no demographics for sfu participants,
 #   so Sub03 (male) is a placeholder to confirm from the stage-1 mask video.
-uniandes_basketball_001_16	Date04_Sub06_bball_mik016	322	 Mikan Layup	51.5
-uniandes_basketball_001_17	Date04_Sub06_bball_rev017	322	 Reverse Layup	100.1
-uniandes_basketball_001_19	Date04_Sub06_bball_mik019	322	 Mikan Layup	39.6
-uniandes_basketball_001_20	Date04_Sub06_bball_rev020	322	 Reverse Layup	79.4
-unc_basketball_03-31-23_02_2	Date03_Sub01_bball_mik002	387	 Mikan Layup	22.0
-unc_basketball_03-31-23_02_3	Date03_Sub01_bball_rev003	387	 Reverse Layup	67.8
-unc_basketball_03-31-23_02_5	Date03_Sub01_bball_mik005	387	 Mikan Layup	23.8
-unc_basketball_03-31-23_02_6	Date03_Sub01_bball_rev006	387	 Reverse Layup	63.9
-unc_basketball_03-31-23_02_8	Date03_Sub01_bball_mik008	387	 Mikan Layup	23.2
-unc_basketball_03-31-23_02_9	Date03_Sub01_bball_rev009	387	 Reverse Layup	64.1
-unc_basketball_03-31-23_02_11	Date03_Sub01_bball_mik011	387	 Mikan Layup	22.4
-unc_basketball_03-31-23_02_12	Date03_Sub01_bball_rev012	387	 Reverse Layup	60.2
-unc_basketball_03-31-23_02_14	Date03_Sub01_bball_mik014	387	 Mikan Layup	24.8
-unc_basketball_03-31-23_02_15	Date03_Sub01_bball_rev015	387	 Reverse Layup	68.4
-unc_basketball_03-31-23_02_17	Date03_Sub01_bball_mik017	387	 Mikan Layup	24.6
-unc_basketball_03-31-23_02_18	Date03_Sub01_bball_rev018	387	 Reverse Layup	64.9
-unc_basketball_03-31-23_02_26	Date03_Sub02_bball_rev026	388	 Reverse Layup	56.2
-unc_basketball_03-31-23_02_29	Date03_Sub02_bball_mik029	388	 Mikan Layup	29.1
-unc_basketball_03-31-23_02_30	Date03_Sub02_bball_rev030	388	 Reverse Layup	50.0
-unc_basketball_03-31-23_02_32	Date03_Sub02_bball_mik032	388	 Mikan Layup	22.7
-unc_basketball_03-31-23_02_33	Date03_Sub02_bball_rev033	388	 Reverse Layup	47.0
-unc_basketball_03-31-23_02_35	Date03_Sub02_bball_mik035	388	 Mikan Layup	21.9
-unc_basketball_03-31-23_02_36	Date03_Sub02_bball_rev036	388	 Reverse Layup	47.5
-unc_basketball_03-31-23_02_38	Date03_Sub02_bball_mik038	388	 Mikan Layup	22.6
-unc_basketball_03-31-23_02_39	Date03_Sub02_bball_rev039	388	 Reverse Layup	50.0
-sfu_basketball017_2	Date05_Sub03_bball_mik002	563	 Mikan Layup	25.9
-sfu_basketball017_4	Date05_Sub03_bball_rev004	563	 Reverse Layup	75.7
-sfu_basketball017_13	Date05_Sub03_bball_rev013	563	 Reverse Layup	77.2
-sfu_basketball017_14	Date05_Sub03_bball_mik014	563	 Mikan Layup	81.8
-sfu_basketball017_16	Date05_Sub03_bball_mik016	563	 Mikan Layup	52.9
-sfu_basketball017_17	Date05_Sub03_bball_rev017	563	 Reverse Layup	76.8
-sfu_basketball017_20	Date05_Sub03_bball_mik020	563	 Mikan Layup	25.6
-sfu_basketball017_22	Date05_Sub03_bball_rev022	563	 Reverse Layup	51.7
+uniandes_basketball_001_16	Date04_Sub06_bball_mik016	322	mik	51.5	cam03
+uniandes_basketball_001_17	Date04_Sub06_bball_rev017	322	rev	100.1	cam03
+uniandes_basketball_001_19	Date04_Sub06_bball_mik019	322	mik	39.6	cam03
+uniandes_basketball_001_20	Date04_Sub06_bball_rev020	322	rev	79.4	cam03
+unc_basketball_03-31-23_02_2	Date03_Sub01_bball_mik002	387	mik	22.0	cam04
+unc_basketball_03-31-23_02_3	Date03_Sub01_bball_rev003	387	rev	67.8	cam04
+unc_basketball_03-31-23_02_5	Date03_Sub01_bball_mik005	387	mik	23.8	cam04
+unc_basketball_03-31-23_02_6	Date03_Sub01_bball_rev006	387	rev	63.9	cam04
+unc_basketball_03-31-23_02_8	Date03_Sub01_bball_mik008	387	mik	23.2	cam04
+unc_basketball_03-31-23_02_9	Date03_Sub01_bball_rev009	387	rev	64.1	cam04
+unc_basketball_03-31-23_02_11	Date03_Sub01_bball_mik011	387	mik	22.4	cam04
+unc_basketball_03-31-23_02_12	Date03_Sub01_bball_rev012	387	rev	60.2	cam04
+unc_basketball_03-31-23_02_14	Date03_Sub01_bball_mik014	387	mik	24.8	cam04
+unc_basketball_03-31-23_02_15	Date03_Sub01_bball_rev015	387	rev	68.4	cam04
+unc_basketball_03-31-23_02_17	Date03_Sub01_bball_mik017	387	mik	24.6	cam04
+unc_basketball_03-31-23_02_18	Date03_Sub01_bball_rev018	387	rev	64.9	cam04
+unc_basketball_03-31-23_02_26	Date03_Sub02_bball_rev026	388	rev	56.2	cam04
+unc_basketball_03-31-23_02_29	Date03_Sub02_bball_mik029	388	mik	29.1	cam04
+unc_basketball_03-31-23_02_30	Date03_Sub02_bball_rev030	388	rev	50.0	cam04
+unc_basketball_03-31-23_02_32	Date03_Sub02_bball_mik032	388	mik	22.7	cam04
+unc_basketball_03-31-23_02_33	Date03_Sub02_bball_rev033	388	rev	47.0	cam04
+unc_basketball_03-31-23_02_35	Date03_Sub02_bball_mik035	388	mik	21.9	cam04
+unc_basketball_03-31-23_02_36	Date03_Sub02_bball_rev036	388	rev	47.5	cam04
+unc_basketball_03-31-23_02_38	Date03_Sub02_bball_mik038	388	mik	22.6	cam04
+unc_basketball_03-31-23_02_39	Date03_Sub02_bball_rev039	388	rev	50.0	cam04
+sfu_basketball017_2	Date05_Sub03_bball_mik002	563	mik	25.9	cam03
+sfu_basketball017_4	Date05_Sub03_bball_rev004	563	rev	75.7	cam03
+sfu_basketball017_13	Date05_Sub03_bball_rev013	563	rev	77.2	cam03
+sfu_basketball017_14	Date05_Sub03_bball_mik014	563	mik	81.8	cam03
+sfu_basketball017_16	Date05_Sub03_bball_mik016	563	mik	52.9	cam03
+sfu_basketball017_17	Date05_Sub03_bball_rev017	563	rev	76.8	cam03
+sfu_basketball017_20	Date05_Sub03_bball_mik020	563	mik	25.6	cam03
+sfu_basketball017_22	Date05_Sub03_bball_rev022	563	rev	51.7	cam03

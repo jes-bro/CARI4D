@@ -46,12 +46,18 @@ stage_done() {
 }
 
 n=0
-while IFS=$'\t' read -r take seq participant drill duration; do
+while IFS=$'\t' read -r take seq participant drill duration pipe_cam; do
     case "$take" in ''|'#'*) continue ;; esac
     if [ -n "${ONLY:-}" ] && [ "$participant" != "$ONLY" ]; then
         continue
     fi
     export TAKE="$take" SEQ="$seq"
+    # The manifest's pipeline camera wins, since it is a per-capture property;
+    # a PIPE_CAM the caller actually typed still overrides it. recon_paths then
+    # re-derives the aux list from whichever won.
+    if [ -z "$PIPE_CAM_EXPLICIT" ] && [ -n "$pipe_cam" ]; then
+        PIPE_CAM="$pipe_cam"
+    fi
     recon_paths
     if [ -n "${SKIP_EXISTING:-}" ] && stage_done "$STAGE"; then
         echo "== skip $seq ($STAGE already done)"

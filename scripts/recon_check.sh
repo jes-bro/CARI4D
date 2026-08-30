@@ -37,8 +37,12 @@ for c in $AUX_CAMS; do
     [ -f "$FAV_DIR/$c.mp4" ] || missing+=("4k/$c")
 done
 
+# The cameras are reported because they are the setting most likely to be wrong
+# and least likely to announce itself: a take reconstructed from the wrong main
+# view runs to completion and simply produces a worse answer.
+cams="main=$PIPE_CAM aux=${AUX_CAMS// /,}"
 if [ ${#missing[@]} -eq 0 ]; then
-    echo "OK      $SEQ  ($TAKE)"
+    echo "OK      $SEQ  ($TAKE)  $cams"
 else
-    echo "MISSING $SEQ  ($TAKE): ${missing[*]}"
+    echo "MISSING $SEQ  ($TAKE)  $cams: ${missing[*]}"
 fi

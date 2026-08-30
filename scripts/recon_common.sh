@@ -37,11 +37,29 @@ REPO="${REPO:-/simurgh2/projects/ret-hoi/CARI4D}"
 TAKES_ROOT="${TAKES_ROOT:-/vision/group/egoexo4d/takes}"
 WORK_ROOT="${WORK_ROOT:-$REPO/work}"
 
-# The camera the pipeline reconstructs from, and the extra calibrated views
-# used only for triangulation. More aux views cost one 4K SAM3 job each and buy
-# triangulation robustness; two is what the basketball reconstruction used.
+# The camera the pipeline reconstructs from. It is a property of the RIG
+# PLACEMENT, not of the task: the exo cameras are fixed within a capture session
+# and re-placed between them, so this belongs in the manifest per capture, not
+# here. The value below is only the fallback for a take run by hand.
+#
+# EgoExo4D's own `best_exo` field is a starting hypothesis, not the answer --
+# it says cam01 for the UNC basketball capture, while the verified dribble
+# reconstruction was built from cam04. It is labelling a different question.
+# Captured before anything derives a default, so recon_paths() can tell an
+# explicit choice from one it computed. A batch iterates over takes whose
+# pipeline camera differs, so both have to be re-derived per sequence -- but a
+# value the caller actually typed must survive that.
+PIPE_CAM_EXPLICIT="${PIPE_CAM:-}"
+AUX_CAMS_EXPLICIT="${AUX_CAMS:-}"
 PIPE_CAM="${PIPE_CAM:-cam04}"
-AUX_CAMS="${AUX_CAMS:-cam01 cam03}"
+
+# Every exo camera in an EgoExo4D capture. AUX_CAMS derives to all of them
+# except the pipeline camera: mask everything. Masking is the expensive,
+# one-time GPU step, while choosing which views to believe is arithmetic over
+# centroids that already exist -- and triangulate_object.py now does that per
+# frame by consensus, so an aux view that is only sometimes good contributes
+# on the frames where it is good instead of being excluded up front.
+ALL_CAMS="${ALL_CAMS:-cam01 cam02 cam03 cam04}"
 
 # SAM3 prompts. These are the basketball ones; a different object needs both
 # overridden, and the roadmap's 0/507-mask incident was exactly this default
@@ -74,6 +92,17 @@ recon_paths() {
     # Derived rather than passed so the three stages cannot disagree about
     # where an artifact lives -- the failure mode being a later stage quietly
     # reading nothing and reconstructing from defaults.
+    # Derived here rather than once at source time, because a batch changes
+    # PIPE_CAM between rows and the aux list has to follow it.
+    if [ -n "$AUX_CAMS_EXPLICIT" ]; then
+        AUX_CAMS="$AUX_CAMS_EXPLICIT"
+    else
+        AUX_CAMS=""
+        for _c in $ALL_CAMS; do
+            [ "$_c" = "$PIPE_CAM" ] || AUX_CAMS="${AUX_CAMS:+$AUX_CAMS }$_c"
+        done
+    fi
+
     # Exported, not just set: the drivers hand these to sbatch through the
     # environment rather than --export=ALL,K=V, so anything a job reads has to
     # be exported here or at the call site.
