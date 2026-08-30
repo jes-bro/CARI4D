@@ -125,7 +125,13 @@ class PredVisualizer(FPBehaveVideoProcessor):
         "render H+O with batch precompute and video-based RGB, write mp4 per sequence"
         out_root = args.out_root
         os.makedirs(out_root, exist_ok=True)
-        out_data = torch.load(args.pred_file, map_location='cpu')
+        # weights_only=False because a prediction bundle is not weights: it
+        # pickles learning.training objects (TrainState among them), which
+        # PyTorch 2.6's default of weights_only=True refuses to unpickle. The
+        # file is this pipeline's own output, so there is nothing to distrust --
+        # prep/run_sapiens_pose.py patches torch.load globally for the same
+        # reason; here one call needs it, so it says so at the call.
+        out_data = torch.load(args.pred_file, map_location='cpu', weights_only=False)
         data_gt, data_pr, data_in = out_data['gt'], out_data['pr'], out_data['in']
 
         frames = data_pr['frames']

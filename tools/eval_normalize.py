@@ -324,7 +324,11 @@ class NormalizedEvaluator(ModelEvaluator):
                 continue
             print(f'Evaluating {pth_file}...')
             count += 1
-            pth_data = torch.load(pth_file, map_location='cuda')
+            # weights_only=False: same as tools/viz_pred.py -- a result bundle
+            # pickles learning.training objects, which PyTorch 2.6 refuses by
+            # default. Latent here until eval is run against a bundle carrying
+            # them, which is every bundle this pipeline writes.
+            pth_data = torch.load(pth_file, map_location='cuda', weights_only=False)
             data_pr = pth_data['pr']
             if cfg.eval_input:
                 data_pr = pth_data['data_in'] # evaluate input
