@@ -97,6 +97,22 @@ def parse_args():
                              "to reject a few-pixel spurious blob")
     parser.add_argument("--trim_rank", type=int, default=1,
                         help="Take the Nth longest run (1 = longest)")
+    # --- emitting several clips from one take -------------------------------
+    parser.add_argument("--emit_root", default=None,
+                        help="Write EVERY run long enough to reconstruct as its own clip "
+                             "directory under here, instead of only the --trim_rank one. "
+                             "A 68s layup take holds several attempts and SAM3 tracks them "
+                             "in separate stretches; masking the take once and keeping one "
+                             "stretch throws the rest away. Directories are named "
+                             "<seq>a, <seq>b, ... longest first, each self-contained")
+    parser.add_argument("--emit_min_frames", type=int, default=60,
+                        help="Runs shorter than this are not worth a reconstruction "
+                             "(default: 60, i.e. 2s)")
+    parser.add_argument("--emit_max_clips", type=int, default=4,
+                        help="Stop after this many clips, so a badly tracked take does not "
+                             "produce a pile of marginal ones (default: 4)")
+    parser.add_argument("--clips_json", default=None,
+                        help="Write the emitted clip list here, for a driver to iterate")
     parser.add_argument("--window_json", default=None,
                         help="Also write the chosen window to this JSON. The trim range is "
                              "otherwise only printed, and prep/find_trim_offset.py exists "
@@ -410,6 +426,57 @@ def save_window_json(path, seq_name, source_video, runs, good, num_frames, fps,
     print(f"Wrote window to {path}")
 
 
+def emit_clips(frames, human_masks, object_masks, runs, good, seq_name, kid, fps,
+               emit_root, min_frames, max_clips, clips_json=None):
+    """Write every usable run as its own self-contained clip directory.
+
+    One take is several layup attempts, and SAM3 tracks them in separate
+    stretches -- masking the take once and keeping only the longest throws the
+    others away, even though their masks were already computed. This keeps them.
+
+    Each clip gets `<emit_root>/<seq><letter>/` holding `masks/` and
+    `masks/trimmed_vids/`, exactly the layout a single-clip run produces, plus
+    its own window.json. So nothing downstream learns a new shape: a clip
+    directory IS a sequence, and the stages after this one take its name and
+    behave as they always have.
+
+    Letters run longest-first (a is the longest run), and the first clip is
+    still `<seq>a` rather than a bare `<seq>` -- a name that says which clip it
+    is beats a name that means "the one we happened to pick first".
+
+    Returns the list of emitted clip records.
+    """
+    usable = [(lo, hi) for lo, hi in runs if hi - lo + 1 >= min_frames][:max_clips]
+    if not usable:
+        print(f"\nNo run reaches --emit_min_frames {min_frames}; emitting nothing.",
+              file=sys.stderr)
+        return []
+
+    emitted = []
+    print(f"\nEmitting {len(usable)} clip(s) under {emit_root}:")
+    for i, (lo, hi) in enumerate(usable):
+        clip_seq = f"{seq_name}{chr(ord('a') + i)}"
+        clip_dir = os.path.join(emit_root, clip_seq)
+        masks_dir = os.path.join(clip_dir, "masks")
+        n = hi - lo + 1
+        print(f"   {clip_seq:<34} frames {lo}-{hi}  {n} frames  {n / fps:.1f}s")
+        save_trimmed(frames, human_masks, object_masks, lo, hi, clip_seq, kid,
+                     masks_dir, fps=fps)
+        save_window_json(os.path.join(clip_dir, "window.json"), clip_seq,
+                         f"{seq_name} frames {lo}-{hi}", runs, good, len(frames),
+                         fps, (lo, hi))
+        emitted.append({"seq": clip_seq, "dir": os.path.abspath(clip_dir),
+                        "lo": int(lo), "hi": int(hi), "n_frames": int(n),
+                        "covered_frac": float(good[lo:hi + 1].mean())})
+
+    if clips_json:
+        os.makedirs(os.path.dirname(os.path.abspath(clips_json)), exist_ok=True)
+        with open(clips_json, "w") as f:
+            json.dump({"take_seq": seq_name, "clips": emitted}, f, indent=1)
+        print(f"Wrote clip list to {clips_json}")
+    return emitted
+
+
 def find_tracked_runs(good, gap_tolerance=0):
     """Contiguous runs of True in `good` as inclusive (start, end) index pairs.
 
@@ -676,6 +743,20 @@ def main():
 
     # --- Masks are written ONCE, and by default they are the trimmed ones: the
     # full-length masks are not wanted, only the stretch that is actually usable.
+    # --- emitting every usable run supersedes picking one, so it comes first.
+    if args.emit_root:
+        emit_clips(frames, human_masks, object_masks, runs, good, seq_name,
+                   args.kid, fps, args.emit_root, args.emit_min_frames,
+                   args.emit_max_clips, args.clips_json)
+        if args.window_json:
+            # The take-level window.json still records every run, which is what
+            # makes the emitted set reviewable without opening each clip.
+            save_window_json(args.window_json, seq_name, args.video, runs, good,
+                             num_frames, fps,
+                             runs[0] if runs else None)
+        print("Done!")
+        return
+
     if args.trim_to_tracked and runs:
         if args.trim_rank > len(runs):
             print(f"ERROR: --trim_rank {args.trim_rank} but only {len(runs)} runs exist.",

@@ -68,8 +68,12 @@ HUMAN_PROMPT="${HUMAN_PROMPT:-one basketball player playing basketball}"
 OBJECT_PROMPT="${OBJECT_PROMPT:-ball}"
 
 # Shortest window worth reconstructing, in frames. Enforced by the trim job so
-# a take whose masks never hold stops the chain before the 4K SAM3 runs.
+# a take whose masks never hold stops the chain before the 4K SAM3 runs, and by
+# stage 1a as the cutoff for which runs become clips at all.
 MIN_FRAMES="${MIN_FRAMES:-60}"
+EMIT_MIN_FRAMES="${EMIT_MIN_FRAMES:-$MIN_FRAMES}"
+EMIT_MAX_CLIPS="${EMIT_MAX_CLIPS:-4}"
+export EMIT_MIN_FRAMES EMIT_MAX_CLIPS
 
 # DRY_RUN=1 prints every sbatch instead of submitting it. The whole chain is
 # only checkable this way -- each stage depends on files the previous one has
@@ -114,6 +118,9 @@ recon_paths() {
     export SRC_448="$FAV_DIR/downscaled/448/$PIPE_CAM.mp4"
     export PIPE_SRC="$WORK/src/$SEQ.0.color.mp4"
     export WINDOW_JSON="$WORK/window.json"
+    # Only meaningful for the take-level pass (stage 1a), where SEQ is the take
+    # base rather than a clip: the list of clips that pass produced.
+    export CLIPS_JSON="$WORK/clips.json"
     export MASKS_DIR="$WORK/masks"
     export CLIPS_DIR="$WORK/masks/trimmed_vids"
     export PIPE_CLIP="$CLIPS_DIR/$SEQ.0.color.mp4"
@@ -167,7 +174,8 @@ recon_sbatch() {
         echo "  would submit: sbatch $*" >&2
         # The environment IS the argument list now, so a dry run that showed
         # only the sbatch line would hide everything worth checking.
-        for v in VIDEO OUT_DIR WINDOW_JSON NO_TRIM CHUNK HUMAN OBJECT \
+        for v in VIDEO OUT_DIR WINDOW_JSON EMIT_ROOT CLIPS_JSON \
+                 EMIT_MIN_FRAMES EMIT_MAX_CLIPS TRIM_GAP NO_TRIM CHUNK HUMAN OBJECT \
                  SRC_DIR CAMS SUFFIX START END MIN_FRAMES \
                  MASKS_ROOT PACKED_ROOT HY3D_ROOT NLF_PATH FP_ROOT \
                  HY3D_MESHES_ROOT IDENTIFIER SAVE_NAME OPT_EXTRA \

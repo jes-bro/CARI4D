@@ -27,9 +27,27 @@ STAGE=${1:?usage: bash scripts/recon_batch.sh <masks|geometry|solve> [manifest]}
 MANIFEST=${2:-splits/layup-batch.tsv}
 
 case "$STAGE" in
-    check|masks|geometry|solve) ;;
-    *) echo "ERROR: stage must be check, masks, geometry or solve (got '$STAGE')" >&2; exit 1 ;;
+    check|clips|masks|geometry|solve) ;;
+    *) echo "ERROR: stage must be check, clips, masks, geometry or solve (got '$STAGE')" >&2; exit 1 ;;
 esac
+
+# check and clips act on a TAKE, which is what a manifest row is. Everything
+# after stage 1a acts on a CLIP, and one take yields several -- so those stages
+# expand each row into the clips that take actually produced.
+case "$STAGE" in
+    check|clips) PER_CLIP="" ;;
+    *)           PER_CLIP=1 ;;
+esac
+
+clips_of() {
+    # Print the clip sequence names stage 1a emitted for the take in $WORK.
+    #
+    # Reads the clip list rather than globbing directory names, so a half-built
+    # or hand-made directory is never mistaken for an emitted clip.
+    local list="$WORK/clips.json"
+    [ -f "$list" ] || return 0
+    python3 -c "import json,sys; print('\n'.join(c['seq'] for c in json.load(open(sys.argv[1]))['clips']))" "$list"
+}
 [ -f "$MANIFEST" ] || { echo "ERROR: no manifest at $MANIFEST" >&2; exit 1; }
 
 stage_done() {
@@ -63,10 +81,31 @@ while IFS=$'\t' read -r take seq participant drill duration pipe_cam; do
         echo "== skip $seq ($STAGE already done)"
         continue
     fi
-    # check prints its own one-line verdict; a header per take would bury it.
-    [ "$STAGE" = check ] || echo "== $seq  <- $take  (participant $participant,$drill,${duration}s)"
-    bash "scripts/recon_$STAGE.sh"
-    n=$((n + 1))
+    if [ -z "$PER_CLIP" ]; then
+        # check prints its own one-line verdict; a header would bury it.
+        [ "$STAGE" = check ] || echo "== $seq  <- $take  (participant $participant,$drill,${duration}s)"
+        bash "scripts/recon_$STAGE.sh"
+        n=$((n + 1))
+        continue
+    fi
+
+    base_seq="$seq"
+    mapfile -t clips < <(clips_of)
+    if [ ${#clips[@]} -eq 0 ]; then
+        echo "== skip $base_seq (no clips yet -- run stage 'clips' first)"
+        continue
+    fi
+    for clip in "${clips[@]}"; do
+        export SEQ="$clip"
+        recon_paths
+        if [ -n "${SKIP_EXISTING:-}" ] && stage_done "$STAGE"; then
+            echo "== skip $clip ($STAGE already done)"
+            continue
+        fi
+        echo "== $clip  <- $take  (participant $participant,$drill)"
+        bash "scripts/recon_$STAGE.sh"
+        n=$((n + 1))
+    done
 done < "$MANIFEST"
 
 echo
