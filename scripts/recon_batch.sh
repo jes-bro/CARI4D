@@ -27,8 +27,8 @@ STAGE=${1:?usage: bash scripts/recon_batch.sh <masks|geometry|solve> [manifest]}
 MANIFEST=${2:-splits/layup-batch.tsv}
 
 case "$STAGE" in
-    masks|geometry|solve) ;;
-    *) echo "ERROR: stage must be masks, geometry or solve (got '$STAGE')" >&2; exit 1 ;;
+    check|masks|geometry|solve) ;;
+    *) echo "ERROR: stage must be check, masks, geometry or solve (got '$STAGE')" >&2; exit 1 ;;
 esac
 [ -f "$MANIFEST" ] || { echo "ERROR: no manifest at $MANIFEST" >&2; exit 1; }
 
@@ -38,6 +38,7 @@ stage_done() {
     # One representative artifact each, not a full check: the goal is to skip
     # work that plainly succeeded, and anything ambiguous should be re-run.
     case "$1" in
+        check)    return 1 ;;   # read-only and cheap; never worth skipping
         masks)    [ -f "$WORK/window.json" ] ;;
         geometry) [ -f "$WORK/geom/object_xyz.npz" ] && [ -f "$WORK/rect/$SEQ.0.color.mp4" ] ;;
         solve)    compgen -G "output/opt/*/$SEQ.pth" >/dev/null ;;
@@ -56,10 +57,15 @@ while IFS=$'\t' read -r take seq participant drill duration; do
         echo "== skip $seq ($STAGE already done)"
         continue
     fi
-    echo "== $seq  <- $take  (participant $participant,$drill,${duration}s)"
+    # check prints its own one-line verdict; a header per take would bury it.
+    [ "$STAGE" = check ] || echo "== $seq  <- $take  (participant $participant,$drill,${duration}s)"
     bash "scripts/recon_$STAGE.sh"
     n=$((n + 1))
 done < "$MANIFEST"
 
 echo
-echo "submitted stage '$STAGE' for $n sequence(s) from $MANIFEST"
+if [ "$STAGE" = check ]; then
+    echo "checked $n sequence(s) from $MANIFEST"
+else
+    echo "submitted stage '$STAGE' for $n sequence(s) from $MANIFEST"
+fi
