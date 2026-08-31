@@ -80,6 +80,14 @@ export EMIT_MIN_FRAMES EMIT_MAX_CLIPS
 # not written yet, so there is nothing else to test against on a login node.
 DRY_RUN="${DRY_RUN:-}"
 
+# Nodes to keep off. A GPU with failing memory reports "uncorrectable ECC
+# error" and kills whatever lands on it, which looks exactly like a pipeline
+# bug from the log -- three aux SAM3 jobs died this way, two of them within ten
+# seconds. Set EXCLUDE_NODES once and every job in every stage carries it:
+#
+#   EXCLUDE_NODES=simurgh6 TAKE=... SEQ=... bash scripts/recon_masks.sh
+EXCLUDE_NODES="${EXCLUDE_NODES:-}"
+
 recon_require_env() {
     # Fail early and by name when TAKE or SEQ is missing.
     #
@@ -170,8 +178,13 @@ recon_sbatch() {
     # space in it -- the SAM3 prompts, the optimizer's override string -- comes
     # out truncated. sbatch's default --export=ALL carries the exported
     # environment through instead, with no parsing involved.
+    # Prepended, so a caller passing its own --exclude still wins (last one
+    # on the sbatch line takes effect).
+    local excl=()
+    [ -n "$EXCLUDE_NODES" ] && excl=(--exclude="$EXCLUDE_NODES")
+
     if [ -n "$DRY_RUN" ]; then
-        echo "  would submit: sbatch $*" >&2
+        echo "  would submit: sbatch ${excl[*]} $*" >&2
         # The environment IS the argument list now, so a dry run that showed
         # only the sbatch line would hide everything worth checking.
         for v in VIDEO OUT_DIR WINDOW_JSON EMIT_ROOT CLIPS_JSON \
@@ -187,7 +200,7 @@ recon_sbatch() {
         return
     fi
     local out
-    out=$(sbatch "$@") || { echo "sbatch failed: $*" >&2; exit 1; }
+    out=$(sbatch "${excl[@]}" "$@") || { echo "sbatch failed: $*" >&2; exit 1; }
     echo "$out" | awk '{print $NF}'
 }
 
