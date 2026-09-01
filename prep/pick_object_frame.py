@@ -10,6 +10,13 @@ a hundred clips. So this scores every frame the object is masked in, and writes
 ONE labelled contact sheet of the best candidates. A person looks at a single
 image, reads off a frame number, and passes it as MESH_FRAME.
 
+Candidates are scored across every 4K aux view, not the pipeline view, because
+that is what scripts/recon_object.sh reconstructs from: the object is ~13 px
+across in the 448 pipeline camera and ~110 px in the aux ones, and the geometry
+is the same whichever camera saw it. Different cameras also see different
+occlusions on the same frame, so the choice is a (view, frame) pair rather than
+a frame.
+
 The crops are produced by run_hy3d_recon's own crop_rgba, so what you are
 looking at is exactly what the reconstruction would receive -- not an
 approximation of it.
@@ -53,8 +60,15 @@ def parse_args():
                         help="the clip's work directory, e.g. work/<seq>")
     parser.add_argument("--top", type=int, default=9,
                         help="candidates to put on the sheet (default: 9)")
-    parser.add_argument("--stride", type=int, default=1,
-                        help="score every Nth frame (default: 1, i.e. all of them)")
+    parser.add_argument("--stride", type=int, default=3,
+                        help="score every Nth frame (default: 3). These are 4K clips "
+                             "and every candidate costs a seek and a decode, so "
+                             "scoring all of them in every view is slow for little "
+                             "gain -- you are choosing between candidates, not "
+                             "optimising to the frame")
+    parser.add_argument("--views", default=None,
+                        help="mask-set names to score, comma separated "
+                             "(default: every cam*-4k set present)")
     parser.add_argument("--min_px", type=int, default=16,
                         help="ignore frames whose object mask is smaller (default: 16)")
     parser.add_argument("--tile", type=int, default=256, help="tile size on the sheet")
@@ -97,6 +111,13 @@ def sharpness(rgb, mask):
     lap = cv2.Laplacian(grey, cv2.CV_64F)
     vals = lap[mask]
     return float(vals.var()) if vals.size else 0.0
+
+
+def aux_views(masks_root, kid):
+    """Return the 4K aux mask-set names present, which are what get scored."""
+    suffix = f"_masks_k{kid}.h5"
+    return sorted(f[:-len(suffix)] for f in os.listdir(masks_root)
+                  if f.endswith(suffix) and f.startswith("cam") and "-4k" in f)
 
 
 def score_frames(video, masks_root, seq, kid, stride, min_px):
@@ -145,7 +166,7 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
     return rows
 
 
-def build_sheet(video, masks_root, seq, kid, picks, tile, out_path):
+def build_sheet(masks_root, kid, picks, tile, out_path):
     """Write one labelled contact sheet of the candidate crops.
 
     Each tile is the crop the reconstruction would actually be given, captioned
@@ -153,10 +174,10 @@ def build_sheet(video, masks_root, seq, kid, picks, tile, out_path):
     """
     tiles = []
     for r in picks:
-        rgb = extract_frame(video, r["frame"])
+        rgb = extract_frame(r["video"], r["frame"])
         # crop_rgba wants the mask as uint8 with 255 for the object, which is
         # what load_object_mask returns -- do not convert it to bool here.
-        mask = load_object_mask(masks_root, seq, r["frame"], kid)
+        mask = load_object_mask(masks_root, r["view"], r["frame"], kid)
         rgba = np.array(crop_rgba(rgb, mask, crop_size=tile))
         img = rgba[:, :, :3].copy()
         # Composite onto grey: the crop is transparent outside the object, and
@@ -165,7 +186,8 @@ def build_sheet(video, masks_root, seq, kid, picks, tile, out_path):
         alpha = (rgba[:, :, 3:4] / 255.0) if rgba.shape[2] == 4 else 1.0
         img = (img * alpha + 128 * (1 - alpha)).astype(np.uint8)
         cv2.rectangle(img, (0, 0), (tile - 1, 22), (0, 0, 0), -1)
-        cv2.putText(img, f"frame {r['frame']}  round {r['roundness']:.2f}",
+        cv2.putText(img, f"{r['view'].replace('-4k','')} f{r['frame']}  "
+                    f"round {r['roundness']:.2f}",
                     (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         tiles.append(img)
 
@@ -180,38 +202,66 @@ def build_sheet(video, masks_root, seq, kid, picks, tile, out_path):
 
 
 def main():
-    """Score the clip's frames, print the ranking and write the contact sheet."""
+    """Score every aux view's frames, print the ranking and write the sheet."""
     args = parse_args()
     work = osp.normpath(args.work)
     seq = osp.basename(work)
     masks_root = osp.join(work, "masks")
-    video = osp.join(masks_root, "trimmed_vids", f"{seq}.0.color.mp4")
-    for p in (masks_root, video):
-        if not osp.exists(p):
-            raise SystemExit(f"ERROR: no {p}; has this clip been through stage 1?")
+    if not osp.isdir(masks_root):
+        raise SystemExit(f"ERROR: no {masks_root}; has this clip been through stage 1?")
 
-    rows = score_frames(video, masks_root, seq, args.kid, args.stride, args.min_px)
+    views = args.views.split(",") if args.views else aux_views(masks_root, args.kid)
+    if not views:
+        raise SystemExit(
+            f"ERROR: no cam*-4k mask sets in {masks_root}. Stage 1b (recon_masks.sh) "
+            f"writes them, and the object is reconstructed from a 4K aux view "
+            f"because it is ~8x larger there than in the pipeline camera.")
+
+    rows = []
+    for view in views:
+        video = osp.join(masks_root, "trimmed_vids", f"{view}.0.color.mp4")
+        if not osp.isfile(video):
+            print(f"  (no clip for {view}, skipping)", file=sys.stderr)
+            continue
+        got = score_frames(video, masks_root, view, args.kid, args.stride, args.min_px)
+        for r in got:
+            r["view"] = view
+            r["video"] = video
+        rows.extend(got)
     if not rows:
-        raise SystemExit(f"ERROR: no frame of {seq} has an object mask of "
+        raise SystemExit(f"ERROR: no frame in any aux view has an object mask of "
                          f"{args.min_px}+ px")
 
+    # Re-normalise across views: score_frames normalised within each view, so a
+    # view that never sees the object well would otherwise field a "best" frame
+    # scoring 1.0 alongside a genuinely good one.
+    max_area = max(r["area"] for r in rows)
+    max_sharp = max(r["sharp"] for r in rows) or 1.0
+    for r in rows:
+        r["score"] = (r["area"] / max_area) * (r["sharp"] / max_sharp)
+        if r["border"]:
+            r["score"] *= 0.25
+    rows.sort(key=lambda r: -r["score"])
+
     picks = rows[:args.top]
-    print(f"{seq}: {len(rows)} candidate frames\n")
-    print(f"{'frame':>6} {'score':>7} {'area_px':>8} {'sharp':>9} {'round':>6}  note")
-    print("-" * 56)
+    print(f"{seq}: {len(rows)} candidates across {len(views)} view(s)\n")
+    print(f"{'view':<12} {'frame':>6} {'score':>7} {'area_px':>8} {'sharp':>9} "
+          f"{'round':>6}  note")
+    print("-" * 70)
     for r in picks:
         note = "TOUCHES EDGE" if r["border"] else ""
         if r["roundness"] and r["roundness"] < 0.7:
             note = (note + " occluded?").strip()
-        print(f"{r['frame']:>6} {r['score']:>7.3f} {r['area']:>8} "
+        print(f"{r['view']:<12} {r['frame']:>6} {r['score']:>7.3f} {r['area']:>8} "
               f"{r['sharp']:>9.1f} {r['roundness']:>6.2f}  {note}")
 
     out = args.out or osp.join(work, "object_candidates.png")
-    build_sheet(video, masks_root, seq, args.kid, picks, args.tile, out)
+    build_sheet(masks_root, args.kid, picks, args.tile, out)
     print(f"\nsheet: {osp.abspath(out)}")
-    print(f"\nLook at the sheet, then reconstruct from the frame you like:")
-    print(f"  MESH_FRAME={picks[0]['frame']} TAKE=<take> SEQ={seq} "
-          f"bash scripts/recon_object.sh")
+    best = picks[0]
+    print(f"\nLook at the sheet, then reconstruct from the tile you like:")
+    print(f"  MESH_CAM={best['view'].replace('-4k', '')} MESH_FRAME={best['frame']} "
+          f"TAKE=<take> SEQ={seq} bash scripts/recon_object.sh")
     return 0
 
 

@@ -14,6 +14,14 @@
 #   TAKE=<take> SEQ=<seq><letter> bash scripts/recon_object.sh
 #   MESH_FRAME=64 TAKE=... SEQ=... bash scripts/recon_object.sh
 #
+# WHICH CAMERA. The crop comes from a 4K AUX view, not the 448 pipeline view.
+# The object is ~13 px across in the pipeline camera and ~110 px in the aux
+# ones -- eight times the linear resolution, for geometry that is the same
+# regardless of which camera saw it. run_hy3d_recon's --out_seq names the
+# result for the tracking sequence, so nothing downstream can tell the
+# difference. MESH_CAM picks the view; unset, the one whose object mask is
+# largest on the chosen frame wins.
+#
 # WHICH FRAME. The crop comes from one frame, so pick one where the object is
 # big, sharp and unoccluded -- single-image reconstruction cannot recover what
 # it cannot see. The default is the clip's midpoint rather than frame 0, since
@@ -58,8 +66,35 @@ fi
 frames=$(recon_window_frames)
 MESH_FRAME="${MESH_FRAME:-$(( ${frames:-100} / 2 ))}"
 
+# Pick the aux view with the most object pixels on that frame. The aux clips
+# are frame-aligned with the pipeline clip by construction -- that is what the
+# frame-accurate trim in stage 1b buys -- so MESH_FRAME means the same instant
+# in all of them.
+if [ -z "${MESH_CAM:-}" ]; then
+    MESH_CAM=$(python3 -c "
+import h5py, sys
+frame, masks, cams = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+best, best_n = None, -1
+for cam in cams:
+    try:
+        with h5py.File(f'{masks}/{cam}-4k_masks_k0.h5', 'r') as f:
+            n = int(f[f'{cam}-4k/{frame:06d}-k0.obj_rend_mask.png'][()].sum())
+    except Exception:
+        continue
+    if n > best_n:
+        best, best_n = cam, n
+print(best or '')
+" "$MESH_FRAME" "$MASKS_DIR" $AUX_CAMS 2>/dev/null || true)
+fi
+[ -n "${MESH_CAM:-}" ] || { echo "ERROR: no aux view has an object mask on frame $MESH_FRAME." >&2
+    echo "       Pick another frame, or MESH_CAM=<cam> to force one." >&2; exit 1; }
+
+MESH_CLIP="$(recon_aux_clip "$MESH_CAM")"
+[ -n "$DRY_RUN" ] || [ -f "$MESH_CLIP" ] || {
+    echo "ERROR: no 4K clip at $MESH_CLIP -- has stage 1b run?" >&2; exit 1; }
+
 log "take=$TAKE  clip=$SEQ${frames:+  ($frames frames)}"
-log "reconstructing the object from frame $MESH_FRAME"
+log "reconstructing the object from $MESH_CAM (4K) frame $MESH_FRAME"
 log "mesh root=$MESH_DIR"
 
 recon_run mkdir -p "$MESH_DIR"
@@ -68,9 +103,13 @@ recon_run mkdir -p "$MESH_DIR"
 # trimmed_vids/ inference -- it would infer the same thing, but a path this
 # script already knows should not be re-derived by string surgery downstream.
 export HY3D_ROOT="$MESH_DIR" MASKS_ROOT="$MASKS_DIR"
+# --out_seq names the result for the tracking sequence even though the pixels
+# came from another camera: fp_hy3d_track globs the tracking prefix, and
+# estimate_scale_video parses the frame index back out of the filename to fetch
+# depth from the TRACKING video.
 job=$(recon_sbatch --job-name="o1-$SEQ" \
-    scripts/slurm_hy3d_recon.sh "$PIPE_CLIP" "$MESH_FRAME" \
-    ${SKIP_HY3D:+--skip_hy3d})
+    scripts/slurm_hy3d_recon.sh "$MESH_CLIP" "$MESH_FRAME" \
+    --out_seq "$SEQ" ${SKIP_HY3D:+--skip_hy3d})
 log "hunyuan3d object reconstruction     job $job"
 
 log ""
