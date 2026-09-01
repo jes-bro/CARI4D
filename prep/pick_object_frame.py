@@ -21,18 +21,30 @@ The crops are produced by run_hy3d_recon's own crop_rgba, so what you are
 looking at is exactly what the reconstruction would receive -- not an
 approximation of it.
 
-What the score rewards, and why:
+What the score rewards, and why. THE CONTOUR IS THE THING: single-image
+reconstruction infers shape largely from the silhouette, so a mask with the net
+or a hand fused onto it produces a deformed mesh no matter how good the pixels
+inside it look.
 
   area        more pixels on the object is more shape information. A ball 13px
               across carries none at all.
-  sharpness   variance of the Laplacian inside the crop. Motion blur destroys
-              the surface detail single-image reconstruction depends on, and a
-              layup is mostly fast motion.
+  solidity    mask area over its convex hull's area. A clean silhouette is
+              close to 1; a protrusion where the mask has grabbed a hand, an
+              arm or the net drags it down. This generalises -- it says the
+              outline is simple, not that the object is round.
+  roundness   4*pi*area / perimeter^2. For a ball this is the direct read on
+              whether the outline is the outline of a ball. Disabled by
+              --not_round for objects that are not round, where it means
+              nothing.
   clipping    a mask touching the frame edge is a partial object; the missing
               part is unrecoverable and gets invented.
-  roundness   reported, not scored. For a ball a low value means something is
-              in front of it -- usually a hand. For other objects it means
-              nothing, so it does not drive the ranking.
+
+  sharpness   REPORTED, NOT SCORED. It used to be scored, and it actively
+              selected bad frames: measured as Laplacian variance inside the
+              mask, it rose when the mask had swallowed some of the net behind
+              the ball, so the highest-scoring frames were the ones whose
+              silhouette was most contaminated. The frames it ranked top
+              reconstructed worst.
 
 Run from the repo root in the cari4d env (newcari4d).
 
@@ -66,6 +78,10 @@ def parse_args():
                              "scoring all of them in every view is slow for little "
                              "gain -- you are choosing between candidates, not "
                              "optimising to the frame")
+    parser.add_argument("--not_round", action="store_true",
+                        help="the object is not round, so do not score its outline "
+                             "for circularity. Solidity still applies -- a clean "
+                             "silhouette matters whatever the shape")
     parser.add_argument("--views", default=None,
                         help="mask-set names to score, comma separated "
                              "(default: every cam*-4k set present)")
@@ -79,25 +95,35 @@ def parse_args():
 
 
 def mask_metrics(mask):
-    """Return (area, touches_border, roundness) for one object mask.
+    """Return (area, touches_border, roundness, solidity) for one object mask.
 
-    Roundness is 4*pi*area / perimeter^2 -- 1.0 for a perfect disc, lower for a
-    silhouette that is notched or elongated. For a ball that is a direct read on
-    whether something is occluding it.
+    Roundness is 4*pi*area / perimeter^2 -- 1.0 for a perfect disc, lower for an
+    outline that is notched or elongated.
+
+    Solidity is the contour's area over its convex hull's area. It falls when
+    the mask has grown a protrusion -- a hand, an arm, a piece of the net behind
+    the ball -- and unlike roundness it says nothing about the object being
+    round, only that its outline is simple. That makes it the general signal:
+    whatever the object, a silhouette with something else fused onto it will
+    reconstruct as something else.
     """
     area = int(mask.sum())
     if area == 0:
-        return 0, True, 0.0
+        return 0, True, 0.0, 0.0
     border = bool(mask[0].any() or mask[-1].any() or mask[:, 0].any() or mask[:, -1].any())
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
-    roundness = 0.0
+    roundness, solidity = 0.0, 0.0
     if contours:
         c = max(contours, key=cv2.contourArea)
+        c_area = cv2.contourArea(c)
         peri = cv2.arcLength(c, True)
         if peri > 0:
-            roundness = float(4.0 * np.pi * cv2.contourArea(c) / (peri * peri))
-    return area, border, roundness
+            roundness = float(4.0 * np.pi * c_area / (peri * peri))
+        hull_area = cv2.contourArea(cv2.convexHull(c))
+        if hull_area > 0:
+            solidity = float(c_area / hull_area)
+    return area, border, roundness, solidity
 
 
 def sharpness(rgb, mask):
@@ -146,11 +172,12 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
         if mask is None:
             continue
         mask = mask.astype(bool)
-        area, border, roundness = mask_metrics(mask)
+        area, border, roundness, solidity = mask_metrics(mask)
         if area < min_px:
             continue
         wanted[idx] = {"frame": idx, "area": area, "border": border,
-                       "roundness": roundness, "mask": mask}
+                       "roundness": roundness, "solidity": solidity,
+                       "mask": mask}
     if not wanted:
         return []
 
@@ -177,18 +204,28 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
     if not rows:
         return []
 
+    score_rows(rows, not_round=False)
+    return rows
+
+
+def score_rows(rows, not_round):
+    """Score and sort candidate rows in place, best first.
+
+    Multiplicative, so a frame needs size AND a clean outline -- being excellent
+    at one cannot buy its way out of being useless at the other. Sharpness is
+    deliberately absent: scoring it selected the frames whose masks had
+    swallowed part of the net, which are exactly the frames that reconstruct
+    worst.
+    """
     max_area = max(r["area"] for r in rows)
-    max_sharp = max(r["sharp"] for r in rows) or 1.0
     for r in rows:
-        # Multiplicative: a frame needs BOTH size and focus, and being excellent
-        # at one cannot buy its way out of being useless at the other.
-        r["score"] = (r["area"] / max_area) * (r["sharp"] / max_sharp)
+        contour = r["solidity"] if not_round else r["solidity"] * r["roundness"]
+        r["score"] = (r["area"] / max_area) * contour
         if r["border"]:
             r["score"] *= 0.25   # heavily penalised, not excluded -- sometimes
                                  # every frame touches an edge and you still
                                  # have to pick one
     rows.sort(key=lambda r: -r["score"])
-    return rows
 
 
 def build_sheet(masks_root, kid, picks, tile, out_path):
@@ -212,7 +249,7 @@ def build_sheet(masks_root, kid, picks, tile, out_path):
         img = (img * alpha + 128 * (1 - alpha)).astype(np.uint8)
         cv2.rectangle(img, (0, 0), (tile - 1, 22), (0, 0, 0), -1)
         cv2.putText(img, f"{r['view'].replace('-4k','')} f{r['frame']}  "
-                    f"round {r['roundness']:.2f}",
+                    f"sol {r['solidity']:.2f} rnd {r['roundness']:.2f}",
                     (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         tiles.append(img)
 
@@ -260,25 +297,24 @@ def main():
     # Re-normalise across views: score_frames normalised within each view, so a
     # view that never sees the object well would otherwise field a "best" frame
     # scoring 1.0 alongside a genuinely good one.
-    max_area = max(r["area"] for r in rows)
-    max_sharp = max(r["sharp"] for r in rows) or 1.0
-    for r in rows:
-        r["score"] = (r["area"] / max_area) * (r["sharp"] / max_sharp)
-        if r["border"]:
-            r["score"] *= 0.25
-    rows.sort(key=lambda r: -r["score"])
+    score_rows(rows, args.not_round)
 
     picks = rows[:args.top]
     print(f"{seq}: {len(rows)} candidates across {len(views)} view(s)\n")
-    print(f"{'view':<12} {'frame':>6} {'score':>7} {'area_px':>8} {'sharp':>9} "
-          f"{'round':>6}  note")
-    print("-" * 70)
+    print(f"{'view':<12} {'frame':>6} {'score':>7} {'area_px':>8} {'solid':>6} "
+          f"{'round':>6} {'sharp':>8}  note")
+    print("-" * 76)
     for r in picks:
-        note = "TOUCHES EDGE" if r["border"] else ""
-        if r["roundness"] and r["roundness"] < 0.7:
-            note = (note + " occluded?").strip()
+        notes = []
+        if r["border"]:
+            notes.append("TOUCHES EDGE")
+        if r["solidity"] < 0.92:
+            notes.append("outline has something stuck to it")
+        elif not args.not_round and r["roundness"] < 0.8:
+            notes.append("outline not round")
         print(f"{r['view']:<12} {r['frame']:>6} {r['score']:>7.3f} {r['area']:>8} "
-              f"{r['sharp']:>9.1f} {r['roundness']:>6.2f}  {note}")
+              f"{r['solidity']:>6.2f} {r['roundness']:>6.2f} {r['sharp']:>8.1f}  "
+              f"{', '.join(notes)}")
 
     out = args.out or osp.join(work, "object_candidates.png")
     build_sheet(masks_root, args.kid, picks, args.tile, out)
