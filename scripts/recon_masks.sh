@@ -80,7 +80,7 @@ unset WINDOW_JSON EMIT_ROOT CLIPS_JSON  # --no_trim picks no window, emits no cl
 for c in $AUX_CAMS; do
     export VIDEO="$(recon_aux_clip "$c")"
     job_c=$(recon_sbatch $(recon_dep "$job_b") \
-        --time="${SAM3_AUX_TIME:-04:00:00}" \
+        --time="${SAM3_AUX_TIME:-00:30:00}" \
         --job-name="m2-$c-$SEQ" scripts/slurm_sam3_masks.sh)
     log "C  sam3 aux $c (4K, no trim)      job $job_c"
 done
