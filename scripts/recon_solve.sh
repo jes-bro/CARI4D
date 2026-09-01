@@ -4,11 +4,13 @@
 # Run on the login node after stage 2's geometry numbers look right. Everything
 # here is GPU hours; nothing in it needs a decision from you until the render.
 #
-#   G  demo-custom.sh steps 1-5.1 on the rectified clip: UniDepth, NLF, global
-#      SMPL-H, depth/human alignment, object scale.
+#   G  demo-custom.sh steps 1-4 on the rectified clip: UniDepth, NLF, global
+#      SMPL-H, depth/human alignment.
 #   H  inject the triangulated ball distances into the aligned depth. FP seeds
 #      its pose from the median depth inside the object mask, and monocular
 #      depth cannot supply that for a small distant ball.
+#   S  the object's metric scale, AFTER the injection -- it separates scale from
+#      distance using depth, and before H that depth is the monocular one.
 #   I  FoundationPose -> CoCoNet -> joint optimization, with the multi-view
 #      human anchor (w_j3d against the triangulated joints) applied in the same
 #      job rather than re-optimizing afterwards.
@@ -50,7 +52,11 @@ log() { echo "[recon-solve] $*" >&2; }
 # the reconstructed mesh). Each reproduces the value that was originally
 # arrived at by hand for the basketball, which is the point: same method, no
 # constant to retype for a different object.
-MESH_OBJ="$(ls "$MESH_DIR"/*/*_align.obj 2>/dev/null | head -1)"
+# `|| true` because under `set -o pipefail` a no-match ls fails the whole
+# pipeline, and the assignment failing exits the script with ls's status --
+# which is what a dry run on a machine with no mesh did, silently and with
+# exit 2.
+MESH_OBJ="$(ls "$MESH_DIR"/*/*_align.obj 2>/dev/null | head -1 || true)"
 if [ -z "$DRY_RUN" ] && [ -f "$OBJECT_XYZ" ]; then
     eval "$(python prep/derive_knobs.py --object_xyz "$OBJECT_XYZ" \
         ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM" \
@@ -110,7 +116,12 @@ log "H  inject triangulated ball depth     job $job_h"
 
 # --- I: FP -> CoCoNet -> optimization ---------------------------------------
 export IDENTIFIER SAVE_NAME OPT_EXTRA
-job_i=$(recon_sbatch $(recon_dep "$job_h") \
+job_s=$(recon_sbatch $(recon_dep "$job_h") \
+    --job-name="s2b-$SEQ" \
+    scripts/slurm_scale_object.sh "$ALIGNED_CLIP")
+log "S  object metric scale (post-inject)  job $job_s"
+
+job_i=$(recon_sbatch $(recon_dep "$job_s") \
     --job-name="s3-$SEQ" \
     scripts/slurm_fp_onward.sh "$ALIGNED_CLIP")
 log "I  foundationpose -> coconet -> opt   job $job_i"

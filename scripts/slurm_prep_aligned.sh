@@ -13,9 +13,13 @@
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
 
-# demo-custom.sh steps 1 through 5.1 only: UniDepth, NLF, global SMPL-H fitting,
-# depth/human alignment, and object scale. Stops there, leaving the aligned clip
-# on disk.
+# demo-custom.sh steps 1 through 4 only: UniDepth, NLF, global SMPL-H fitting
+# and depth/human alignment. Stops there, leaving the aligned clip on disk.
+#
+# Step 5.1, the object's metric scale, used to be here and is now its own job
+# AFTER the injection -- see scripts/slurm_scale_object.sh. It cannot separate
+# scale from distance without trustworthy depth, and before the injection the
+# depth inside the object mask is the monocular estimate.
 #
 # Why it stops: prep/inject_object_depth.py has to write triangulated distances
 # into that clip's depth BEFORE FoundationPose reads it, and step 4 rewrites the
@@ -130,13 +134,5 @@ python prep/align_monod2hum.py --wild_video --nlf_path "$nlf_path-opt" \
 aligned="${video_dir}-aligned/${video_prefix}.0.color.mp4"
 [ -f "$aligned" ] || { echo "ERROR: alignment produced no $aligned" >&2; exit 1; }
 
-# Step 5.1: metric scale for the object template. Ahead of the injection
-# because it reads the object mask and the aligned depth, not the injected one,
-# and slurm_fp_onward.sh requires <hy3d_root>-metric to already exist.
-log "step 5.1: object scale"
-python tools/estimate_scale_video.py --wild_video --video "$aligned" \
-    --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric" \
-    --erode_depth_thres "$SCALE_ERODE"
-
 log "done. aligned clip: $aligned"
-ls -la "${video_dir}-aligned" "$hy3d_root-metric"
+ls -la "${video_dir}-aligned"
