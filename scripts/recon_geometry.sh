@@ -8,8 +8,7 @@
 #      Kannala-Brandt model, so keypoints detected on a rectified clip would be
 #      undistorted twice.
 #   E  the geometry job (scripts/slurm_geometry.sh): triangulate the ball,
-#      triangulate the human, rectify the pipeline clip and its masks, write
-#      the ball template.
+#      triangulate the human, rectify the pipeline clip and its masks.
 #   F  Sapiens again, this time on the RECTIFIED clip, into rect/. That is the
 #      set the monocular pipeline and the optimizer's 2D-joint loss read;
 #      everything downstream of rectification lives in rectified pixels.
@@ -64,7 +63,7 @@ fi
 
 log "take=$TAKE  seq=$SEQ  work=$WORK"
 
-recon_run mkdir -p "$PACKED_MV" "$GEOM_DIR" "$RECT_DIR" "$MESH_DIR"
+recon_run mkdir -p "$PACKED_MV" "$GEOM_DIR" "$RECT_DIR"
 
 # --- D: Sapiens per view, fisheye pixels, one packed root -------------------
 export MASKS_ROOT="$MASKS_DIR" PACKED_ROOT="$PACKED_MV"
@@ -88,7 +87,7 @@ done
 # Every variable slurm_geometry.sh reads was exported by recon_paths().
 job_e=$(recon_sbatch $(recon_dep "${pose_jobs[@]}") \
     --job-name="g2-$SEQ" scripts/slurm_geometry.sh)
-log "E  triangulate + rectify + mesh       job $job_e"
+log "E  triangulate + rectify                job $job_e"
 
 # --- F: Sapiens on the rectified clip, for the pipeline itself --------------
 # MASKS_ROOT and PACKED_ROOT are both RECT_DIR: rectify_fisheye.py wrote the
@@ -104,4 +103,6 @@ log ""
 log "when these finish, CHECK before stage 3:"
 log "  grep -A20 'triangulation coverage' recon-geom-*.out"
 log "  python3 prep/inspect_object_xyz.py $OBJECT_XYZ"
+log "then, if the object mesh is not made yet:"
+log "  TAKE=$TAKE SEQ=$SEQ bash scripts/recon_object.sh"
 log "then: TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"

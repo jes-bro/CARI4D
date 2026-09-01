@@ -36,7 +36,10 @@ shift $(( $# > 2 ? 2 : $# ))
 EXTRA_ARGS=("$@")   # e.g. --skip_hy3d for a fast smoke test
 
 REPO=/simurgh2/projects/ret-hoi/CARI4D
-HY3D_ROOT=$REPO/data/cari4d-demo/meshes
+# Per-clip work directories need their own mesh root; the flat default is the
+# released demo's layout and would put every clip's object in one place under
+# the same frame-indexed name.
+HY3D_ROOT=${HY3D_ROOT:-$REPO/data/cari4d-demo/meshes}
 CACHE_ROOT=/simurgh2/projects/ret-hoi
 
 # run_sam3_masks.py writes its trimmed clip to <masks_root>/trimmed_vids/, so a

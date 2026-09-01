@@ -22,8 +22,11 @@
 #   2  inspect_object_xyz.py   the coverage/residual report you actually read
 #   3  triangulate_human.py    17 COCO joints per frame, same views, same model
 #   4  rectify_fisheye.py      pipeline clip + masks -> a true pinhole camera
-#   5  make_ball_mesh.py       the object template (a ball's shape is known;
-#                              Hunyuan3D on a 13px ball only adds error)
+#
+# The object mesh is NOT made here. It is a Hunyuan3D reconstruction from the
+# scene (scripts/recon_object.sh), which needs a different conda env, and it is
+# a reconstruction rather than a template on purpose -- the object's real shape
+# is what the pipeline is recovering.
 #
 # Triangulation runs on the ORIGINAL fisheye pixels and rectification happens
 # after it, deliberately: the Kannala-Brandt model is applied once, and feeding
@@ -59,7 +62,6 @@ cd "$REPO"
 : "${OBJECT_XYZ:?set OBJECT_XYZ}"
 : "${HUMAN_J3D:?set HUMAN_J3D}"
 : "${RECT_DIR:?set RECT_DIR}"
-: "${MESH_DIR:?set MESH_DIR}"
 PIPE_CAM="${PIPE_CAM:-cam04}"
 AUX_CAMS="${AUX_CAMS:-cam01 cam03}"
 
@@ -67,7 +69,7 @@ log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "seq=$SEQ  pipe_cam=$PIPE_CAM  aux=$AUX_CAMS"
 
-mkdir -p "$GEOM_DIR" "$RECT_DIR" "$MESH_DIR"
+mkdir -p "$GEOM_DIR" "$RECT_DIR"
 
 # --view arguments, built once. Object views name mask sets (<cam>:<root>:<seq>);
 # human views name the clip the keypoints were computed on (<cam>:<clip>). The
@@ -102,10 +104,5 @@ log "rectifying the pipeline clip"
 python prep/rectify_fisheye.py --video "$PIPE_CLIP" --calib "$CALIB" \
     --cam "$PIPE_CAM" --masks_root "$MASKS_DIR" --out_dir "$RECT_DIR"
 
-# --- 5: the object template -------------------------------------------------
-log "writing the ball template"
-python scripts/make_ball_mesh.py --seq "$SEQ" --hy3d_root "$MESH_DIR" \
-    ${BALL:+--ball "$BALL"}
-
 log "done. outputs:"
-ls -la "$GEOM_DIR" "$RECT_DIR" "$MESH_DIR"
+ls -la "$GEOM_DIR" "$RECT_DIR"
