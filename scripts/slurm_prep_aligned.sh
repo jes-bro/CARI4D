@@ -69,10 +69,16 @@ hy3d_root="${HY3D_ROOT:?set HY3D_ROOT}"
 nlf_path="${NLF_PATH:?set NLF_PATH}"
 
 # Step 5.1 reads depth through FoundationPose's register(), which erodes it
-# first. The same threshold the tracking step needs applies here, and for the
-# same reason -- it just was never passed, so a small distant object was erased
-# before its scale could be measured.
-erode_depth_thres="${ERODE_DEPTH_THRES:-0.001}"
+# first, and the threshold has to exceed how much the object's own surface
+# recedes per pixel or the object is erased before its scale can be measured.
+#
+# 'auto' derives that from Z/f -- this object's distance over the focal length,
+# with the object's size cancelling out -- rather than from a number tuned for
+# one object. It computes 55mm for the basketball, against the 50mm that was
+# arrived at by hand, and 14mm for something at 1.5m where 50mm would be far
+# too coarse. Deliberately NOT ERODE_DEPTH_THRES: that one is the tracking
+# step's, and hardcodes a basketball.
+SCALE_ERODE="${SCALE_ERODE:-auto}"
 
 # behave_data.const.get_hy3d_mesh_file falls back to $HY3D_MESHES_ROOT when no
 # root is threaded through, and step 4 goes through it: align_monod2hum calls
@@ -92,7 +98,7 @@ log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --
 log "video=$video"
 log "masks_root=$masks_root  packed_root=$packed_root  hy3d_root=$hy3d_root  nlf_path=$nlf_path"
 log "hy3d_meshes_root=$HY3D_MESHES_ROOT"
-log "erode_depth_thres=$erode_depth_thres"
+log "scale_erode=$SCALE_ERODE"
 
 python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda ok:', torch.cuda.get_device_name(0))"
 command -v ffprobe >/dev/null || { echo "ERROR: ffprobe not found" >&2; exit 1; }
@@ -130,7 +136,7 @@ aligned="${video_dir}-aligned/${video_prefix}.0.color.mp4"
 log "step 5.1: object scale"
 python tools/estimate_scale_video.py --wild_video --video "$aligned" \
     --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric" \
-    --erode_depth_thres "$erode_depth_thres"
+    --erode_depth_thres "$SCALE_ERODE"
 
 log "done. aligned clip: $aligned"
 ls -la "${video_dir}-aligned" "$hy3d_root-metric"

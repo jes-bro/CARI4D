@@ -24,6 +24,37 @@ import Utils
 from tools.estimate_scale import estimate_metric_scale
 from behave_data.behave_video import BaseBehaveVideoData
 
+def auto_erode_thres(depth, mask, camera_K, safety=3.0):
+    """Depth-erosion threshold for THIS object at THIS distance, in metres.
+
+    erode_depth marks a pixel inconsistent when a neighbour's depth differs by
+    more than the threshold, so the threshold has to exceed how much the
+    object's own surface recedes from one pixel to the next -- otherwise the
+    object erodes away completely and guess_translation finds nothing.
+
+    For an object of depth extent D spanning f*D/Z pixels at distance Z, that
+    per-pixel change is D / (f*D/Z) = Z/f. The object's SIZE cancels: only its
+    distance and the focal length matter, which is what makes this work for a
+    basketball at 7m and a pot at 1.5m without anyone tuning a number per
+    object. On the egoexo4d basketball, Z=6m and f=328px gives 18mm -- the
+    figure demo-custom.sh quotes from measuring it.
+
+    Z is the median raw depth inside the mask. It is monocular and unreliable
+    in absolute terms, which is the entire reason the injection step exists --
+    but a threshold only needs the right order of magnitude, and `safety`
+    covers the rest.
+
+    Returns None when the mask holds no depth at all, since a guess from
+    nothing is worse than the caller's default.
+    """
+    vals = depth[(mask > 127) & (depth > 0.001)]
+    if vals.size == 0:
+        return None
+    Z = float(np.median(vals))
+    f = float((camera_K[0, 0] + camera_K[1, 1]) / 2.0)
+    return safety * Z / f
+
+
 def get_specific_frame(video_prefix, frame_time, kid=1):
     from behave_data.video_reader import ColorDepthController
     ctrl = ColorDepthController(video_prefix, kid)
@@ -61,8 +92,18 @@ class MetricScaleEstimator(BaseBehaveVideoData):
         refiner = PoseRefinePredictor()
         glctx = dr.RasterizeCudaContext()
 
+        thres = args.erode_depth_thres
+        if isinstance(thres, str) and thres == 'auto':
+            thres = auto_erode_thres(depth, mask_o, camera_K, safety=args.erode_safety)
+            if thres is None:
+                thres = 0.001
+                print('auto erode threshold: no depth inside the object mask, '
+                      f'falling back to {thres}')
+            else:
+                print(f'auto erode threshold: {thres * 1000:.1f} mm '
+                      f'(safety {args.erode_safety} x Z/f)')
         estimate_metric_scale(scorer, refiner, glctx, args.outpath, hy_file, color, depth, mask_o, camera_K,
-                              erode_depth_thres=args.erode_depth_thres)
+                              erode_depth_thres=float(thres))
 
 
 
@@ -77,11 +118,17 @@ if __name__ == '__main__':
     # keeps FoundationPose's 1mm default while the tracking step right after it
     # uses whatever the pipeline passes, so the two disagree about the same
     # depth map -- and a small distant object survives only one of them.
-    parser.add_argument('--erode_depth_thres', default=0.001, type=float,
-                        help='metres of depth difference erode_depth treats as '
-                             'consistent between neighbouring pixels. Must exceed the '
-                             "object's own depth change per pixel or the object is "
-                             'erased before its scale can be measured')
+    parser.add_argument('--erode_depth_thres', default='auto',
+                        help="metres of depth difference erode_depth treats as "
+                             "consistent between neighbouring pixels, or 'auto' "
+                             "(default) to derive it from this object's distance and "
+                             "the focal length. Must exceed the object's own depth "
+                             "change per pixel or the object is erased before its "
+                             "scale can be measured")
+    parser.add_argument('--erode_safety', default=3.0, type=float,
+                        help='multiple of Z/f used by --erode_depth_thres auto '
+                             '(default: 3.0, which reproduces the 0.05 hand-tuned for '
+                             'the basketball)')
     args = parser.parse_args()
 
     estimator = MetricScaleEstimator(args)
