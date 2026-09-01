@@ -35,12 +35,17 @@ FRAME_INDEX=${2:-0}
 shift $(( $# > 2 ? 2 : $# ))
 EXTRA_ARGS=("$@")   # e.g. --skip_hy3d for a fast smoke test
 
-REPO=/simurgh2/projects/ret-hoi/CARI4D
+# REPO defaults to the directory sbatch was invoked from, which the drivers
+# guarantee is the repo root -- they cd there before submitting. That makes the
+# whole pipeline work from any checkout without editing a line, instead of every
+# job cd'ing into one person's home. An explicit REPO still wins, and the
+# literal remains the last resort for a bare sbatch from somewhere else.
+REPO="${REPO:-${SLURM_SUBMIT_DIR:-/simurgh2/projects/ret-hoi/CARI4D}}"
 # Per-clip work directories need their own mesh root; the flat default is the
 # released demo's layout and would put every clip's object in one place under
 # the same frame-indexed name.
 HY3D_ROOT=${HY3D_ROOT:-$REPO/data/cari4d-demo/meshes}
-CACHE_ROOT=/simurgh2/projects/ret-hoi
+CACHE_ROOT="${CACHE_ROOT:-/simurgh2/projects/ret-hoi}"
 
 # run_sam3_masks.py writes its trimmed clip to <masks_root>/trimmed_vids/, so a
 # video sitting in a trimmed_vids/ directory tells us its own masks_root. That
@@ -78,7 +83,7 @@ mkdir -p "$HF_HOME" "$HY3DGEN_MODELS" "$TORCH_HOME" \
 export PYTHONUNBUFFERED=1
 
 source ~/.bashrc
-conda activate hy3d
+conda activate "${HY3D_ENV:-hy3d}"
 
 cd "$REPO"
 

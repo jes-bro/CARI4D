@@ -34,8 +34,13 @@ set -euo pipefail
 
 VIDEO=${1:?usage: sbatch scripts/slurm_demo_custom.sh <video.mp4>}
 
-REPO=/simurgh2/projects/ret-hoi/CARI4D
-CACHE_ROOT=/simurgh2/projects/ret-hoi
+# REPO defaults to the directory sbatch was invoked from, which the drivers
+# guarantee is the repo root -- they cd there before submitting. That makes the
+# whole pipeline work from any checkout without editing a line, instead of every
+# job cd'ing into one person's home. An explicit REPO still wins, and the
+# literal remains the last resort for a bare sbatch from somewhere else.
+REPO="${REPO:-${SLURM_SUBMIT_DIR:-/simurgh2/projects/ret-hoi/CARI4D}}"
+CACHE_ROOT="${CACHE_ROOT:-/simurgh2/projects/ret-hoi}"
 
 log() { echo "[cari4d $(date -u +%H:%M:%S)] $*"; }
 

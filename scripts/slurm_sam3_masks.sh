@@ -42,7 +42,11 @@ OBJECT="${OBJECT:-ball}"
 # Where the masks land. The flat default is fine for one sequence at a time;
 # a batch of takes needs a directory each, because the aux clips are named for
 # their camera (cam01-4k) and would otherwise collide between takes.
-OUT_DIR="${OUT_DIR:-/simurgh2/projects/ret-hoi/CARI4D/sam3masks}"
+# REPO defaults to the directory sbatch was invoked from, which the drivers
+# guarantee is the repo root. That makes this work from any checkout rather
+# than cd'ing into one person's home; an explicit REPO still wins.
+REPO="${REPO:-${SLURM_SUBMIT_DIR:-/simurgh2/projects/ret-hoi/CARI4D}}"
+OUT_DIR="${OUT_DIR:-$REPO/sam3masks}"
 
 # Optional: record the trimmed window as JSON so the aux views can be cut to
 # the same frames by a job queued before the window is known.
@@ -82,14 +86,14 @@ echo "[sam3] human='$HUMAN' object='$OBJECT'  HF_HOME=$HF_HOME"
 echo "[sam3] chunk=${CHUNK:-300} trim=$([ -n "${NO_TRIM:-}" ] && echo off || echo on)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
-cd /simurgh2/projects/ret-hoi/CARI4D
+cd "$REPO"
 
 # python -u so prints survive a kill: a job cancelled at the time limit
 # otherwise loses everything still sitting in the stdout buffer.
 # ${NO_TRIM:+--no_trim} is unquoted on purpose -- it expands to nothing when
 # NO_TRIM is unset, and quoting it would pass an empty argument argparse rejects.
 # The :+ form is safe under `set -u`.
-python -u /simurgh2/projects/ret-hoi/CARI4D/prep/run_sam3_masks.py \
+python -u "$REPO/prep/run_sam3_masks.py" \
     --video "$VIDEO" \
     --human_prompt "$HUMAN" \
     --object_prompt "$OBJECT" \

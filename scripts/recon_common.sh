@@ -33,9 +33,12 @@
 # layup by a female subject is e.g. Date04_Sub06_bball_rev017, and getting the
 # Sub wrong silently fits the wrong-gender body model.
 
-REPO="${REPO:-/simurgh2/projects/ret-hoi/CARI4D}"
+# Exported, because the slurm scripts read REPO from the environment and would
+# otherwise fall back to whichever checkout the literal names.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TAKES_ROOT="${TAKES_ROOT:-/vision/group/egoexo4d/takes}"
 WORK_ROOT="${WORK_ROOT:-$REPO/work}"
+export REPO TAKES_ROOT WORK_ROOT
 
 # The camera the pipeline reconstructs from. It is a property of the RIG
 # PLACEMENT, not of the task: the exo cameras are fixed within a capture session

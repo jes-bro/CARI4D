@@ -33,8 +33,13 @@ set -euo pipefail
 
 PTH_FILE=${1:?usage: sbatch scripts/slurm_opt_only.sh <coconet .pth>}
 
-REPO=/simurgh2/projects/ret-hoi/CARI4D
-CACHE_ROOT=/simurgh2/projects/ret-hoi
+# REPO defaults to the directory sbatch was invoked from, which the drivers
+# guarantee is the repo root -- they cd there before submitting. That makes the
+# whole pipeline work from any checkout without editing a line, instead of every
+# job cd'ing into one person's home. An explicit REPO still wins, and the
+# literal remains the last resort for a bare sbatch from somewhere else.
+REPO="${REPO:-${SLURM_SUBMIT_DIR:-/simurgh2/projects/ret-hoi/CARI4D}}"
+CACHE_ROOT="${CACHE_ROOT:-/simurgh2/projects/ret-hoi}"
 
 log() { echo "[opt-only $(date -u +%H:%M:%S)] $*"; }
 
