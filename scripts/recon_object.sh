@@ -25,13 +25,14 @@
 # frame's depth, so a frame with no usable depth inside the object mask fails
 # there with "valid is empty" -- one stage later, in a different job.
 #
-# SMOKE TEST FIRST. --skip_hy3d writes the RGBA crop and stops, in about a
-# second, with no model download and no GPU:
+# PICK THE FRAME FIRST, do not guess:
 #
-#   SKIP_HY3D=1 TAKE=... SEQ=... bash scripts/recon_object.sh
+#   python prep/pick_object_frame.py --work work/<seq>
 #
-# Then look at the crop before spending an allocation on it -- it is the entire
-# input to the reconstruction.
+# That scores every frame the object is masked in and writes ONE labelled
+# contact sheet of the best candidates. Look at it, read off a frame number,
+# pass it as MESH_FRAME. Nothing else in this pipeline rests on a single frame
+# the way this does.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -73,7 +74,7 @@ job=$(recon_sbatch --job-name="o1-$SEQ" \
 log "hunyuan3d object reconstruction     job $job"
 
 log ""
-log "when it finishes, LOOK AT IT before stage 3:"
+log "when it finishes, LOOK AT THE MESH before stage 3:"
 log "  ls $MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba/"
 log "  # the _rgba.png is the input crop; the _align.obj is the mesh"
 log "then: TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"
