@@ -163,6 +163,25 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
+    # Pass 0: every frame's area and centroid, at full rate. Masks are cheap to
+    # read and the temporal reference has to be built from consecutive frames --
+    # judging a frame against candidates three apart would compare it to a
+    # different moment, which is the thing being measured.
+    profile = {}
+    for idx in range(n_frames):
+        try:
+            m = load_object_mask(masks_root, seq, idx, kid)
+        except Exception:
+            continue
+        if m is None:
+            continue
+        m = m.astype(bool)
+        a = int(m.sum())
+        if a < min_px:
+            continue
+        ys, xs = np.nonzero(m)
+        profile[idx] = (a, float(ys.mean()), float(xs.mean()))
+
     # Pass 1: masks only, no video.
     wanted = {}
     for idx in range(0, n_frames, stride):
@@ -178,6 +197,7 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
             continue
         wanted[idx] = {"frame": idx, "area": area, "border": border,
                        "roundness": roundness, "solidity": solidity,
+                       "anomaly": temporal_anomaly(profile, idx),
                        "mask": mask}
     if not wanted:
         return []
@@ -209,35 +229,73 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
     return rows
 
 
-# How hard a less-clean outline is punished. Contamination ADDS area, so the
-# size term and the cleanliness term pull in opposite directions and a plain
-# product lets a contaminated frame win on bulk: a ball with a net strip fused
-# to it measured 20% more area for a solidity of 0.91 against 0.98, and outscored
-# the clean frame. Raising the ratio to a power makes a small drop in
-# cleanliness cost more than the area it came with.
-SOLIDITY_POWER = 4.0
+# Frames either side used as a frame's own reference. Wide enough to be a
+# stable median, short enough that the object's real motion has not changed the
+# silhouette much.
+NEIGHBOURHOOD = 3
+
+# How hard an anomalous frame is punished. Contamination ADDS area, so size and
+# cleanliness pull against each other and a mild penalty lets a contaminated
+# frame win on bulk.
+ANOMALY_WEIGHT = 6.0
+
+
+def temporal_anomaly(profile, frame, half=NEIGHBOURHOOD):
+    """How far this frame's mask departs from the frames either side of it.
+
+    The object is continuous in time; a mask that has grabbed something else is
+    not. The net appears behind the ball for a handful of frames, a hand enters
+    and leaves. Real viewpoint and distance change smoothly, contamination
+    steps -- so a frame measured against its immediate neighbours tells you
+    whether something was added, with no assumption about the object's shape.
+    That is what makes this general where solidity and circularity were not: a
+    whisk, a pot and a ball are all continuous in time, while only a ball is
+    round and only a compact object is solid.
+
+    Two components, both scale-free so they mean the same thing for a near
+    object as a far one:
+      * area in excess of the local median, as a fraction of it. One-sided,
+        because contamination adds and rarely subtracts.
+      * centroid displacement from the local median, in object radii -- a mask
+        that has fused with something drags its centre off.
+
+    `profile` maps every frame to (area, cy, cx). Returns 0.0 when a frame has
+    no neighbours to be judged against, since an unsupported accusation is
+    worse than none.
+    """
+    near = [profile[f] for f in range(frame - half, frame + half + 1)
+            if f != frame and f in profile]
+    if not near:
+        return 0.0
+    med_area = float(np.median([p[0] for p in near]))
+    if med_area <= 0:
+        return 0.0
+    area, cy, cx = profile[frame]
+    excess = max(0.0, area - med_area) / med_area
+    med_cy = float(np.median([p[1] for p in near]))
+    med_cx = float(np.median([p[2] for p in near]))
+    radius = np.sqrt(med_area / np.pi) or 1.0
+    drift = float(np.hypot(cy - med_cy, cx - med_cx)) / radius
+    return excess + drift
 
 
 def score_rows(rows, round_object):
     """Score and sort candidate rows in place, best first.
 
-    Cleanliness is measured RELATIVE to the cleanest frame in this clip, not
-    against 1.0. That is what keeps it shape-agnostic: a pot or a chair has a
-    low solidity in every frame because it really is concave, and only the
-    frames where something got fused onto its outline fall below the clip's own
-    best. An absolute threshold would condemn the whole clip.
-
-    Multiplicative, so a frame needs size AND a clean outline; being excellent
-    at one cannot buy its way out of being useless at the other.
+    size x cleanliness, where cleanliness comes from how ordinary the frame is
+    against its temporal neighbours rather than from the shape of its outline.
+    Solidity and circularity are reported but do not score: both are priors
+    about what the object looks like, and they fail in opposite directions --
+    solidity punishes a genuinely intricate object, circularity punishes
+    anything that is not a ball.
     """
     max_area = max(r["area"] for r in rows)
-    max_sol = max(r["solidity"] for r in rows) or 1.0
-    max_rnd = max(r["roundness"] for r in rows) or 1.0
     for r in rows:
-        contour = (r["solidity"] / max_sol) ** SOLIDITY_POWER
+        clean = 1.0 / (1.0 + ANOMALY_WEIGHT * r["anomaly"])
+        r["score"] = (r["area"] / max_area) * clean
         if round_object:
-            contour *= (r["roundness"] / max_rnd) ** SOLIDITY_POWER
-        r["score"] = (r["area"] / max_area) * contour
+            max_rnd = max(x["roundness"] for x in rows) or 1.0
+            r["score"] *= r["roundness"] / max_rnd
         if r["border"]:
             r["score"] *= 0.25   # heavily penalised, not excluded -- sometimes
                                  # every frame touches an edge and you still
@@ -266,7 +324,7 @@ def build_sheet(masks_root, kid, picks, tile, out_path):
         img = (img * alpha + 128 * (1 - alpha)).astype(np.uint8)
         cv2.rectangle(img, (0, 0), (tile - 1, 22), (0, 0, 0), -1)
         cv2.putText(img, f"{r['view'].replace('-4k','')} f{r['frame']}  "
-                    f"sol {r['solidity']:.2f} rnd {r['roundness']:.2f}",
+                    f"anom {r['anomaly']:.2f}",
                     (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         tiles.append(img)
 
@@ -318,20 +376,18 @@ def main():
 
     picks = rows[:args.top]
     print(f"{seq}: {len(rows)} candidates across {len(views)} view(s)\n")
-    print(f"{'view':<12} {'frame':>6} {'score':>7} {'area_px':>8} {'solid':>6} "
-          f"{'round':>6} {'sharp':>8}  note")
-    print("-" * 76)
+    print(f"{'view':<12} {'frame':>6} {'score':>7} {'area_px':>8} {'anom':>6} "
+          f"{'solid':>6} {'round':>6} {'sharp':>8}  note")
+    print("-" * 84)
     for r in picks:
         notes = []
         if r["border"]:
             notes.append("TOUCHES EDGE")
-        if r["solidity"] < 0.92:
-            notes.append("outline has something stuck to it")
-        elif args.round_object and r["roundness"] < 0.8:
-            notes.append("outline not round")
+        if r["anomaly"] > 0.15:
+            notes.append("mask jumps vs neighbouring frames -- something fused on?")
         print(f"{r['view']:<12} {r['frame']:>6} {r['score']:>7.3f} {r['area']:>8} "
-              f"{r['solidity']:>6.2f} {r['roundness']:>6.2f} {r['sharp']:>8.1f}  "
-              f"{', '.join(notes)}")
+              f"{r['anomaly']:>6.2f} {r['solidity']:>6.2f} {r['roundness']:>6.2f} "
+              f"{r['sharp']:>8.1f}  {', '.join(notes)}")
 
     out = args.out or osp.join(work, "object_candidates.png")
     build_sheet(masks_root, args.kid, picks, args.tile, out)
