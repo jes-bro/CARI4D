@@ -99,10 +99,12 @@ job_f=$(recon_sbatch $(recon_dep "$job_e") \
     scripts/slurm_sapiens_pose.sh "$RECT_CLIP")
 log "F  sapiens on the rectified clip      job $job_f"
 
-log ""
-log "when these finish, CHECK before stage 3:"
-log "  grep -A20 'triangulation coverage' recon-geom-*.out"
-log "  python3 prep/inspect_object_xyz.py $OBJECT_XYZ"
-log "then, if the object mesh is not made yet:"
-log "  TAKE=$TAKE SEQ=$SEQ bash scripts/recon_object.sh"
-log "then: TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"
+recon_check \
+    "grep -E 'frames triangulated|reprojection error|joints triangulated per frame|residuals .kept' recon-geom-<jobid>.out" \
+    "# healthy: ~1-2 px reprojection, most frames triangulated, 17 of 17 joints"
+recon_next \
+    "TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh" \
+    "" \
+    "but ONLY once the object mesh exists. If it does not yet:" \
+    "" \
+    "   python prep/pick_object_frame.py --work $WORK"

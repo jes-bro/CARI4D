@@ -112,8 +112,10 @@ job=$(recon_sbatch --job-name="o1-$SEQ" \
     --out_seq "$SEQ" ${SKIP_HY3D:+--skip_hy3d})
 log "hunyuan3d object reconstruction     job $job"
 
-log ""
-log "when it finishes, LOOK AT THE MESH before stage 3:"
-log "  ls $MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba/"
-log "  # the _rgba.png is the input crop; the _align.obj is the mesh"
-log "then: TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"
+MESH_OBJ="$MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba/${SEQ}_$(printf '%03d' "$MESH_FRAME")_align.obj"
+recon_check \
+    "python -c \"import trimesh,sys; m=trimesh.load(sys.argv[1],process=False); e=m.extents; print('extents',e,'ratio',round(max(e)/min(e),3))\" $MESH_OBJ" \
+    "# ratio near 1.0 is a ball. Much above ~1.15 means the reconstruction failed --" \
+    "# pick a different camera or frame and run this stage again."
+recon_next \
+    "TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"

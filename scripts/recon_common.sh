@@ -230,3 +230,28 @@ except Exception:
 if w:
     print(w['n_frames'])" "$WINDOW_JSON" 2>/dev/null
 }
+
+
+recon_check() {
+    # Print the CHECK block a stage ends with: what to look at before moving on.
+    #
+    # Loud and fully substituted on purpose. Every path a reader has to fill in
+    # themselves is a chance to fill it in wrong, and every check that lives in
+    # a separate document is a check that gets skipped.
+    echo "" >&2
+    echo "  ---- CHECK THIS FIRST, when the jobs above have finished ----" >&2
+    local line
+    for line in "$@"; do echo "      $line" >&2; done
+}
+
+recon_next() {
+    # Print the NEXT COMMAND block, ready to copy.
+    echo "" >&2
+    echo "  ============================================================" >&2
+    echo "   NEXT COMMAND" >&2
+    echo "  ============================================================" >&2
+    local line
+    for line in "$@"; do echo "   $line" >&2; done
+    echo "  ============================================================" >&2
+    echo "" >&2
+}

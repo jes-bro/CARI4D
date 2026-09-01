@@ -66,9 +66,12 @@ job=$(recon_sbatch --time="${SAM3_FULL_TIME:-06:00:00}" \
     --job-name="c1-$SEQ" scripts/slurm_sam3_masks.sh)
 log "sam3 over the whole take            job $job"
 
-log ""
-log "when it finishes, CHECK before stage 1b:"
-log "  cat $CLIPS_JSON"
-log "  ls $MASKS_DIR/${SEQ}_sam3_vis.mp4     # watch it"
-log "then, per clip you want:"
-log "  TAKE=$TAKE SEQ=${SEQ}a bash scripts/recon_masks.sh"
+recon_check \
+    "cat $CLIPS_JSON" \
+    "ls -d ${WORK_ROOT}/${SEQ}?" \
+    "# watch each clip: ${WORK_ROOT}/<clip>/masks/trimmed_vids/<clip>.0.color.mp4" \
+    "# drop any that is not a real attempt at the task"
+recon_next \
+    "Run this ONCE PER CLIP, substituting the letter (a, b, c ...):" \
+    "" \
+    "   TAKE=$TAKE SEQ=${SEQ}a bash scripts/recon_masks.sh"

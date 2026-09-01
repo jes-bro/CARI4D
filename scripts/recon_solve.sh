@@ -98,6 +98,14 @@ job_j=$(recon_sbatch $(recon_dep "$job_i") \
     scripts/slurm_viz_pred.sh "$RESULT_DIR/$SEQ.pth" "$ALIGNED_CLIP")
 log "J  render                             job $job_j"
 
-log ""
-log "result:   $RESULT_DIR/$SEQ.pth"
-log "render:   output/viz-pred/"
+recon_check \
+    "ls -lat output/viz-pred/ | head -3" \
+    "# watch the newest mp4 -- that is the reconstruction over the source video" \
+    "" \
+    "result: $RESULT_DIR/$SEQ.pth"
+recon_next \
+    "Nothing -- this clip is done." \
+    "" \
+    "Start the next clip at:" \
+    "" \
+    "   TAKE=$TAKE SEQ=<next clip> bash scripts/recon_masks.sh"

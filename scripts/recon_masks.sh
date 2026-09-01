@@ -85,10 +85,14 @@ for c in $AUX_CAMS; do
     log "C  sam3 aux $c (4K, no trim)      job $job_c"
 done
 
-log ""
-log "when these finish, CHECK before stage 2:"
-log "  grep -H 'Object masks found' sam3-masks-*.out"
-log "  ls $MASKS_DIR/*_sam3_vis.mp4     # watch each one"
-log "then, in either order (they are independent):"
-log "  TAKE=$TAKE SEQ=$SEQ bash scripts/recon_geometry.sh"
-log "  TAKE=$TAKE SEQ=$SEQ bash scripts/recon_object.sh"
+recon_check \
+    "python prep/check_view_coverage.py --masks_root $MASKS_DIR --seq $SEQ" \
+    "# if it reports a shorter usable run than the clip, cut the clip down:" \
+    "#   python prep/retrim_clip.py --work $WORK --lo <first> --hi <last>" \
+    "#   then use the NEW name (${SEQ}t) in every command after that"
+recon_next \
+    "TAKE=$TAKE SEQ=$SEQ bash scripts/recon_geometry.sh" \
+    "" \
+    "and this one too -- they are independent, run both:" \
+    "" \
+    "   python prep/pick_object_frame.py --work $WORK"
