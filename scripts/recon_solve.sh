@@ -43,21 +43,24 @@ log() { echo "[recon-solve] $*" >&2; }
 # object-to-person depth gap actually observed. Both with generous margin,
 # since both fail asymmetrically -- too loose keeps background the mask
 # discards anyway, too tight deletes the object.
+# Every object-dependent knob below is DERIVED from this clip: how far the
+# object is seen (ZFAR), how far it gets from the person (DEPTH_HUMAN_BAND),
+# how much its surface recedes per pixel (ERODE_DEPTH_THRES = Z/f), and whether
+# its orientation is observable at all (REINIT_EVERY, from a symmetry test on
+# the reconstructed mesh). Each reproduces the value that was originally
+# arrived at by hand for the basketball, which is the point: same method, no
+# constant to retype for a different object.
+MESH_OBJ="$(ls "$MESH_DIR"/*/*_align.obj 2>/dev/null | head -1)"
 if [ -z "$DRY_RUN" ] && [ -f "$OBJECT_XYZ" ]; then
     eval "$(python prep/derive_knobs.py --object_xyz "$OBJECT_XYZ" \
-        ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM")"
+        ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM" \
+        ${MESH_OBJ:+--mesh "$MESH_OBJ"})"
 fi
 TSTART="${TSTART:-0}"
 ZFAR="${ZFAR:-20}"
 DEPTH_HUMAN_BAND="${DEPTH_HUMAN_BAND:-3.0}"
-
-# Still hand-set, and still a basketball. ERODE_DEPTH_THRES has an automatic
-# form (see the scale step's SCALE_ERODE) that has not been extended here.
-# REINIT_EVERY=1 is justified by a sphere's orientation being unobservable, so
-# re-registering every frame costs nothing -- on an asymmetric object it would pick
-# a different arbitrary orientation each frame, and nothing would say so.
 ERODE_DEPTH_THRES="${ERODE_DEPTH_THRES:-0.05}"
-REINIT_EVERY="${REINIT_EVERY:-1}"
+REINIT_EVERY="${REINIT_EVERY-1}"
 DEPTH_MAD_K="${DEPTH_MAD_K:-3.0}"
 
 # --- optimizer variant ------------------------------------------------------

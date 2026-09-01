@@ -68,6 +68,22 @@ ZFAR_MIN = 3.0
 BAND_MARGIN = 1.5
 BAND_MIN = 0.3
 
+# Rotational symmetry, as the chamfer distance under rotation divided by the
+# chamfer under a plain resample -- see symmetry_score. A symmetric object
+# scores ~1: rotating it changes nothing that resampling would not have changed
+# anyway. Measured on primitives: sphere 0.97, cylinder 2.46, pot with a handle
+# 2.93, box 4.16, thin rod 23.9. Below the threshold the orientation is
+# unobservable, so re-registering every frame costs nothing; above it,
+# re-registration picks a different arbitrary orientation each time and nothing
+# reports that it happened.
+SYMMETRY_TOL = 1.5
+SYMMETRY_ROTATIONS = 24
+
+# Re-registration is only WORTH its cost when the object moves far enough
+# between frames to leave the tracker's convergence basin. Measured as motion
+# per frame in units of the object's own diameter.
+MOTION_PER_DIAMETER = 0.25
+
 
 def object_diameter_px(masks_root, seq, kid, width):
     """Median apparent diameter of the object, in reference-scale pixels.
@@ -113,6 +129,62 @@ def human_distances(npz):
     return out
 
 
+def symmetry_score(mesh_file, n_rot=SYMMETRY_ROTATIONS, n_pts=1200, seed=0):
+    """How much a rotation changes the object, relative to resampling it.
+
+    Whether re-registering every frame is safe comes down to one question: can
+    the object's orientation be observed at all? For a sphere it cannot -- every
+    rotation maps the surface onto itself -- so FoundationPose picking a
+    different orientation each frame costs nothing. For anything with structure
+    the same setting produces a different arbitrary orientation every frame,
+    silently.
+
+    Measured by rotating the object's own surface points and asking whether they
+    still land on it. The subtlety is that a rotated sample can never match
+    exactly, because it is a DIFFERENT random set of points on the same surface
+    -- so a perfect sphere still scores its own sampling density, and comparing
+    that against an absolute threshold measures point count rather than shape.
+
+    So the rotated chamfer is divided by the chamfer of an unrotated resample:
+    the same sampling noise, without the rotation. A symmetric object lands at
+    ~1.0 because rotating it changes nothing a resample would not have changed
+    anyway. Anything with structure lands above.
+    """
+    import trimesh
+    mesh = trimesh.load(mesh_file, process=False)
+    rng = np.random.default_rng(seed)
+    pts = mesh.sample(n_pts)
+    pts = pts - pts.mean(0)
+
+    def chamfer(a, b):
+        """Mean distance from each point of `a` to the nearest point of `b`."""
+        return float(np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+                     .min(axis=1).mean())
+
+    # The floor: a second independent sample of the same surface, unrotated.
+    ref = mesh.sample(n_pts) - pts.mean(0) * 0
+    ref = ref - ref.mean(0)
+    floor = chamfer(ref, pts)
+    if floor <= 0:
+        return 0.0
+
+    scores = []
+    for _ in range(n_rot):
+        # A uniformly random rotation, via QR of a Gaussian matrix.
+        q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+        q *= np.sign(np.diag(r))
+        if np.linalg.det(q) < 0:
+            q[:, 0] *= -1
+        scores.append(chamfer(pts @ q.T, pts))
+    return float(np.median(scores)) / floor
+
+
+def object_diameter_m(mesh_file):
+    """The object's largest extent in metres, from its metric-scale mesh."""
+    import trimesh
+    return float(max(trimesh.load(mesh_file, process=False).extents))
+
+
 def emit(name, value, why):
     """Print a shell assignment on stdout and its justification on stderr."""
     print(f"{name}={value}")
@@ -133,6 +205,9 @@ def parse_args():
     p.add_argument("--human_j3d", default=None)
     p.add_argument("--calib", default=None)
     p.add_argument("--cam", default="cam04")
+    p.add_argument("--mesh", default=None,
+                   help="metric-scale object mesh, for the symmetry test behind "
+                        "REINIT_EVERY and for the object's true size")
     return p.parse_args()
 
 
@@ -160,6 +235,48 @@ def main():
         emit("ZFAR", f"{zfar:.1f}",
              f"{ZFAR_MARGIN:g} x {d_obj.max():.2f}m, the furthest the object is seen")
         did = True
+
+        # Tracking's erode threshold, same Z/f as the scale step's: an object
+        # of depth extent D spanning f*D/Z pixels recedes D/(f*D/Z) = Z/f per
+        # pixel, and the size cancels.
+        f = None
+        if args.calib:
+            from prep.triangulate_object import read_calibration
+            cams = read_calibration(args.calib, args.width, args.height)
+            K = cams[args.cam]["K"]
+            f = float((K[0, 0] + K[1, 1]) / 2.0)
+        if f:
+            z_med = float(np.median(d_obj))
+            erode = 3.0 * z_med / f
+            emit("ERODE_DEPTH_THRES", f"{erode:.4f}",
+                 f"3 x {z_med:.2f}m / {f:.0f}px, the object's depth change per pixel")
+
+        # REINIT_EVERY: worth it only when the object both moves far enough
+        # between frames to leave the tracker's basin AND has an orientation
+        # nobody can observe anyway.
+        if args.mesh and os.path.isfile(args.mesh):
+            sym = symmetry_score(args.mesh)
+            diam = object_diameter_m(args.mesh)
+            step = float(np.median(np.linalg.norm(np.diff(obj["xyz"], axis=0), axis=1))) \
+                if len(obj["xyz"]) > 1 else 0.0
+            fast = diam > 0 and (step / diam) > MOTION_PER_DIAMETER
+            symmetric = sym < SYMMETRY_TOL
+            if symmetric and fast:
+                emit("REINIT_EVERY", "1",
+                     f"symmetry {sym:.3f} < {SYMMETRY_TOL} (orientation unobservable) "
+                     f"and {step:.3f}m/frame over a {diam:.3f}m object")
+            else:
+                emit("REINIT_EVERY", "",
+                     f"symmetry {sym:.3f}, motion {step:.3f}m/frame over a "
+                     f"{diam:.3f}m object -- "
+                     + ("not symmetric: re-registering would pick a different "
+                        "orientation each frame" if not symmetric
+                        else "moves little between frames; incremental tracking holds"))
+                if fast and not symmetric:
+                    print("  WARNING: this object moves fast AND has an observable "
+                          "orientation. Neither setting is good -- incremental "
+                          "tracking may lose it, re-registration may spin it. "
+                          "Watch the render.", file=sys.stderr)
 
         if args.human_j3d:
             hum = np.load(args.human_j3d)
