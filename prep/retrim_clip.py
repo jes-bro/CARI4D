@@ -215,7 +215,18 @@ def main():
         }, f, indent=1)
 
     print(f"\nwrote {new_work}")
-    print(f"next: TAKE=<take> SEQ={new_seq} bash scripts/recon_geometry.sh")
+    # Which stage comes next depends on what there was to slice. Retrimming
+    # after stage 1b carries every view across and geometry can run; retrimming
+    # a clip that has only ever seen stage 1a carries one view, and geometry
+    # would fail on it for want of anything to triangulate against. Doing it in
+    # that order is legitimate and cheaper -- the aux views then get cut to the
+    # tightened window and the dead frames are never masked at all -- so this
+    # says which case you are in rather than assuming.
+    if len(views) > 1:
+        print(f"next: TAKE=<take> SEQ={new_seq} bash scripts/recon_geometry.sh")
+    else:
+        print(f"only the pipeline view was present, so this clip has no aux masks yet.")
+        print(f"next: TAKE=<take> SEQ={new_seq} bash scripts/recon_masks.sh")
     return 0
 
 
