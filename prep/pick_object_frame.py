@@ -123,15 +123,21 @@ def aux_views(masks_root, kid):
 def score_frames(video, masks_root, seq, kid, stride, min_px):
     """Score every frame whose object mask is usable, best first.
 
+    Two passes, because decoding is the whole cost. The masks are cheap to read
+    and rule out most frames on their own, so they are checked first from the
+    H5 alone; only the survivors are decoded. Those are then read with ONE
+    sequential pass over the video rather than a seek per frame -- these are 4K
+    clips, and open-seek-decode-close per candidate made this take minutes.
+
     Returns a list of dicts. area and sharpness are normalised against the best
-    frame in this clip rather than an absolute scale, because both depend
-    entirely on how far away this particular camera was.
+    frame in this clip, since both depend on how far away this camera was.
     """
     cap = cv2.VideoCapture(video)
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
-    rows = []
+    # Pass 1: masks only, no video.
+    wanted = {}
     for idx in range(0, n_frames, stride):
         try:
             mask = load_object_mask(masks_root, seq, idx, kid)
@@ -143,12 +149,31 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
         area, border, roundness = mask_metrics(mask)
         if area < min_px:
             continue
-        try:
-            rgb = extract_frame(video, idx)
-        except RuntimeError:
-            continue    # a frame the decoder cannot seek to is not a candidate
-        rows.append({"frame": idx, "area": area, "border": border,
-                     "roundness": roundness, "sharp": sharpness(rgb, mask)})
+        wanted[idx] = {"frame": idx, "area": area, "border": border,
+                       "roundness": roundness, "mask": mask}
+    if not wanted:
+        return []
+
+    # Pass 2: one sequential read, stopping at the last frame we care about.
+    last = max(wanted)
+    cap = cv2.VideoCapture(video)
+    idx = 0
+    while idx <= last:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if idx in wanted:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            wanted[idx]["sharp"] = sharpness(rgb, wanted[idx]["mask"])
+        idx += 1
+    cap.release()
+
+    rows = []
+    for r in wanted.values():
+        if "sharp" not in r:      # never decoded, so not a candidate
+            continue
+        del r["mask"]             # do not carry full frames out of here
+        rows.append(r)
     if not rows:
         return []
 
