@@ -32,10 +32,9 @@ inside it look.
               close to 1; a protrusion where the mask has grabbed a hand, an
               arm or the net drags it down. This generalises -- it says the
               outline is simple, not that the object is round.
-  roundness   4*pi*area / perimeter^2. For a ball this is the direct read on
-              whether the outline is the outline of a ball. Disabled by
-              --not_round for objects that are not round, where it means
-              nothing.
+  roundness   4*pi*area / perimeter^2. A prior about the object being round, so
+              it is OFF unless you pass --round_object. Solidity is the part
+              that generalises; this is the part that does not.
   clipping    a mask touching the frame edge is a partial object; the missing
               part is unrecoverable and gets invented.
 
@@ -78,10 +77,12 @@ def parse_args():
                              "scoring all of them in every view is slow for little "
                              "gain -- you are choosing between candidates, not "
                              "optimising to the frame")
-    parser.add_argument("--not_round", action="store_true",
-                        help="the object is not round, so do not score its outline "
-                             "for circularity. Solidity still applies -- a clean "
-                             "silhouette matters whatever the shape")
+    parser.add_argument("--round_object", action="store_true",
+                        help="the object is round (a ball), so also score its outline "
+                             "for circularity. OFF by default: solidity is the general "
+                             "signal and applies to any shape, while circularity is a "
+                             "prior about this particular object and would quietly "
+                             "penalise every frame of a pot or a chair")
     parser.add_argument("--views", default=None,
                         help="mask-set names to score, comma separated "
                              "(default: every cam*-4k set present)")
@@ -204,22 +205,38 @@ def score_frames(video, masks_root, seq, kid, stride, min_px):
     if not rows:
         return []
 
-    score_rows(rows, not_round=False)
+    score_rows(rows, round_object=False)
     return rows
 
 
-def score_rows(rows, not_round):
+# How hard a less-clean outline is punished. Contamination ADDS area, so the
+# size term and the cleanliness term pull in opposite directions and a plain
+# product lets a contaminated frame win on bulk: a ball with a net strip fused
+# to it measured 20% more area for a solidity of 0.91 against 0.98, and outscored
+# the clean frame. Raising the ratio to a power makes a small drop in
+# cleanliness cost more than the area it came with.
+SOLIDITY_POWER = 4.0
+
+
+def score_rows(rows, round_object):
     """Score and sort candidate rows in place, best first.
 
-    Multiplicative, so a frame needs size AND a clean outline -- being excellent
-    at one cannot buy its way out of being useless at the other. Sharpness is
-    deliberately absent: scoring it selected the frames whose masks had
-    swallowed part of the net, which are exactly the frames that reconstruct
-    worst.
+    Cleanliness is measured RELATIVE to the cleanest frame in this clip, not
+    against 1.0. That is what keeps it shape-agnostic: a pot or a chair has a
+    low solidity in every frame because it really is concave, and only the
+    frames where something got fused onto its outline fall below the clip's own
+    best. An absolute threshold would condemn the whole clip.
+
+    Multiplicative, so a frame needs size AND a clean outline; being excellent
+    at one cannot buy its way out of being useless at the other.
     """
     max_area = max(r["area"] for r in rows)
+    max_sol = max(r["solidity"] for r in rows) or 1.0
+    max_rnd = max(r["roundness"] for r in rows) or 1.0
     for r in rows:
-        contour = r["solidity"] if not_round else r["solidity"] * r["roundness"]
+        contour = (r["solidity"] / max_sol) ** SOLIDITY_POWER
+        if round_object:
+            contour *= (r["roundness"] / max_rnd) ** SOLIDITY_POWER
         r["score"] = (r["area"] / max_area) * contour
         if r["border"]:
             r["score"] *= 0.25   # heavily penalised, not excluded -- sometimes
@@ -297,7 +314,7 @@ def main():
     # Re-normalise across views: score_frames normalised within each view, so a
     # view that never sees the object well would otherwise field a "best" frame
     # scoring 1.0 alongside a genuinely good one.
-    score_rows(rows, args.not_round)
+    score_rows(rows, args.round_object)
 
     picks = rows[:args.top]
     print(f"{seq}: {len(rows)} candidates across {len(views)} view(s)\n")
@@ -310,7 +327,7 @@ def main():
             notes.append("TOUCHES EDGE")
         if r["solidity"] < 0.92:
             notes.append("outline has something stuck to it")
-        elif not args.not_round and r["roundness"] < 0.8:
+        elif args.round_object and r["roundness"] < 0.8:
             notes.append("outline not round")
         print(f"{r['view']:<12} {r['frame']:>6} {r['score']:>7.3f} {r['area']:>8} "
               f"{r['solidity']:>6.2f} {r['roundness']:>6.2f} {r['sharp']:>8.1f}  "
