@@ -60,7 +60,8 @@ CLIPS_JSON="${CLIPS_JSON:-}"
 
 # ---- HF cache -> project space, NOT quota'd home. Also where sam3.pt lands:
 #      $HF_HOME/hub/models--facebook--sam3/snapshots/<sha>/sam3.pt
-export HF_HOME="${HF_HOME:-/simurgh2/projects/ret-hoi/hf_cache}"
+CACHE_ROOT="${CACHE_ROOT:-/simurgh2/projects/ret-hoi}"
+export HF_HOME="${HF_HOME:-$CACHE_ROOT/hf_cache}"
 
 # ---- token: must be in the *submitting* env (sbatch doesn't source ~/.bashrc).
 #      Pre-authenticate ONCE on the login node so this job needs no network login:

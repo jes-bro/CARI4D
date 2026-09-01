@@ -43,6 +43,14 @@ export HY3D_ENV=hy3d
 export CACHE_ROOT=/simurgh2/projects/ret-hoi
 export CHECKPOINT=/simurgh2/projects/ret-hoi/sapiens_ckpts/sapiens_host/pose/checkpoints/sapiens_0.3b/sapiens_0.3b_coco_best_coco_AP_796.pth
 
+# --- Hugging Face token ------------------------------------------------------
+# SAM3's weights are gated. Authenticate ONCE on the login node so the jobs
+# never need to log in:
+#   HF_HOME=$CACHE_ROOT/hf_cache huggingface-cli login --token <tok>
+# That writes $HF_HOME/token, which the jobs read. Exporting HF_TOKEN in the
+# submitting shell works too -- sbatch carries it through.
+# export HF_TOKEN=
+
 # --- cluster -----------------------------------------------------------------
 # Nodes to keep away from. A GPU with failing memory reports "uncorrectable ECC
 # error" and kills whatever lands on it, which reads like a pipeline bug.
@@ -51,3 +59,23 @@ export CHECKPOINT=/simurgh2/projects/ret-hoi/sapiens_ckpts/sapiens_host/pose/che
 # The #SBATCH --account, --partition and --mail-user lines are still literals
 # inside scripts/slurm_*.sh. On a different cluster those need editing there;
 # there is no environment override for them yet.
+
+# --- NOT set here: things that must exist in the checkout --------------------
+# These are files and clones, not paths, so there is nothing to point at --
+# they have to be present. See README/docs and CLAUDE.md:
+#
+#   sam3/                     clone of facebookresearch/sam3, pip install -e
+#   Hunyuan3D-2/              clone, plus an extracted blender-*/ inside it
+#   unidepth/                 clone of UniDepth
+#   VolumetricSMPL/           clone, patched with scripts/volumetric_smplh.patch
+#   weights/                  NLF + FoundationPose weights
+#   experiments/cari4d-release/step031397.pth    the trained CoCoNet checkpoint
+#   data/smpl/smplh/SMPLH_{male,female}.pkl      from the MANO project page
+#   data/smpl/kid_template.npy                   from AGORA
+#
+# The SMPL-H models are not redistributable and must be downloaded per person.
+#
+# NOT needed, despite appearances: the BEHAVE dataset. behave_data/const.py
+# hardcodes BEHAVE_ROOT to the original author's home, but every path that
+# reads it is dead for wild sequences -- opt_refineout hardcodes use_hy3d=True
+# above it, and video_data guards it with `if not cfg.wild_video`.

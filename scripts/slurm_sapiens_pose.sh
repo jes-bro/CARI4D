@@ -40,9 +40,10 @@ log() { echo "[sapiens $(date -u +%H:%M:%S)] $*"; }
 
 # Caches to project space -- /sailhome is over quota. mmengine and torch.hub
 # both write there by default and fail late and confusingly when it is full.
-export HF_HOME="${HF_HOME:-/simurgh2/projects/ret-hoi/hf_cache}"
-export TORCH_HOME="${TORCH_HOME:-/simurgh2/projects/ret-hoi/torch_cache}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/simurgh2/projects/ret-hoi/xdg_cache}"
+CACHE_ROOT="${CACHE_ROOT:-/simurgh2/projects/ret-hoi}"
+export HF_HOME="${HF_HOME:-$CACHE_ROOT/hf_cache}"
+export TORCH_HOME="${TORCH_HOME:-$CACHE_ROOT/torch_cache}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CACHE_ROOT/xdg_cache}"
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$XDG_CACHE_HOME"
 
 # Unbuffered, so a job killed at the time limit does not lose its output.
