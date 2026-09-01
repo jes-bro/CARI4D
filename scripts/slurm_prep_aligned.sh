@@ -68,6 +68,12 @@ packed_root="${PACKED_ROOT:?set PACKED_ROOT}"
 hy3d_root="${HY3D_ROOT:?set HY3D_ROOT}"
 nlf_path="${NLF_PATH:?set NLF_PATH}"
 
+# Step 5.1 reads depth through FoundationPose's register(), which erodes it
+# first. The same threshold the tracking step needs applies here, and for the
+# same reason -- it just was never passed, so a small distant object was erased
+# before its scale could be measured.
+erode_depth_thres="${ERODE_DEPTH_THRES:-0.001}"
+
 # behave_data.const.get_hy3d_mesh_file falls back to $HY3D_MESHES_ROOT when no
 # root is threaded through, and step 4 goes through it: align_monod2hum calls
 # load_smpl_obj_uvmap(use_hy3d=True), which SystemExits if no mesh is found --
@@ -86,6 +92,7 @@ log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --
 log "video=$video"
 log "masks_root=$masks_root  packed_root=$packed_root  hy3d_root=$hy3d_root  nlf_path=$nlf_path"
 log "hy3d_meshes_root=$HY3D_MESHES_ROOT"
+log "erode_depth_thres=$erode_depth_thres"
 
 python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda ok:', torch.cuda.get_device_name(0))"
 command -v ffprobe >/dev/null || { echo "ERROR: ffprobe not found" >&2; exit 1; }
@@ -122,7 +129,8 @@ aligned="${video_dir}-aligned/${video_prefix}.0.color.mp4"
 # and slurm_fp_onward.sh requires <hy3d_root>-metric to already exist.
 log "step 5.1: object scale"
 python tools/estimate_scale_video.py --wild_video --video "$aligned" \
-    --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric"
+    --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric" \
+    --erode_depth_thres "$erode_depth_thres"
 
 log "done. aligned clip: $aligned"
 ls -la "${video_dir}-aligned" "$hy3d_root-metric"

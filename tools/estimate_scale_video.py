@@ -61,7 +61,8 @@ class MetricScaleEstimator(BaseBehaveVideoData):
         refiner = PoseRefinePredictor()
         glctx = dr.RasterizeCudaContext()
 
-        estimate_metric_scale(scorer, refiner, glctx, args.outpath, hy_file, color, depth, mask_o, camera_K)
+        estimate_metric_scale(scorer, refiner, glctx, args.outpath, hy_file, color, depth, mask_o, camera_K,
+                              erode_depth_thres=args.erode_depth_thres)
 
 
 
@@ -71,7 +72,17 @@ class MetricScaleEstimator(BaseBehaveVideoData):
 
 if __name__ == '__main__':
     import argparse
-    args = BaseBehaveVideoData.get_parser().parse_args()
+    parser = BaseBehaveVideoData.get_parser()
+    # Same knob and same default as prep/fp_behave.py's. Without it this step
+    # keeps FoundationPose's 1mm default while the tracking step right after it
+    # uses whatever the pipeline passes, so the two disagree about the same
+    # depth map -- and a small distant object survives only one of them.
+    parser.add_argument('--erode_depth_thres', default=0.001, type=float,
+                        help='metres of depth difference erode_depth treats as '
+                             'consistent between neighbouring pixels. Must exceed the '
+                             "object's own depth change per pixel or the object is "
+                             'erased before its scale can be measured')
+    args = parser.parse_args()
 
     estimator = MetricScaleEstimator(args)
     estimator.estimate_scale(args)

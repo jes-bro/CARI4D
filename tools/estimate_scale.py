@@ -58,7 +58,8 @@ def fp_scale_estimator(args):
     # load raw hy3d mesh
     estimate_metric_scale(scorer, refiner, glctx, outdir, hy_file, color, depth, mask_o, camera_K)
 
-def estimate_metric_scale(scorer, refiner, glctx, outdir, hy_file, color, depth, mask_o, camera_K):
+def estimate_metric_scale(scorer, refiner, glctx, outdir, hy_file, color, depth, mask_o, camera_K,
+                          erode_depth_thres=0.001):
     """
     estimate metric scale of the object
     input params:
@@ -141,6 +142,15 @@ def estimate_metric_scale(scorer, refiner, glctx, outdir, hy_file, color, depth,
             mesh_t.vertices = mesh_t.vertices * scale
             est = FoundationPose(model_pts=mesh_t.vertices, model_normals=mesh_t.vertex_normals, mesh=mesh_t, scorer=scorer,
                              refiner=refiner, debug_dir=debug_dir, debug=0, glctx=glctx)
+            # register() erodes the depth before reading it, and FoundationPose
+            # defaults that threshold to 1mm. prep/fp_behave.py overrides it for
+            # tracking (--erode_depth_thres, 0.05 for the basketball) and this
+            # never did, so the same depth map that tracks fine was erased here:
+            # a 24cm sphere at 6m recedes ~18mm per pixel, so at 1mm every
+            # neighbour reads inconsistent and the object disappears entirely.
+            # The symptom is "guess_translation() valid is empty" followed by a
+            # crash on pose_last, on the first scale candidate.
+            est.erode_depth_diff_thres = erode_depth_thres
             score_vis = f'{debug_dir}/scale_{scale:.3f}_score.png'
             refine_vis = f'{debug_dir}/scale_{scale:.3f}_refine.png'
             pose = est.register(K=camera_K, rgb=color, depth=depth, ob_mask=mask_o.astype(bool),
