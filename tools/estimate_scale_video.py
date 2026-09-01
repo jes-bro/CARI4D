@@ -74,8 +74,17 @@ class MetricScaleEstimator(BaseBehaveVideoData):
         hy_file = sorted(glob(f'{self.args.hy3d_root}/{video_prefix}*/*{video_prefix}*.obj'))[0]
         frame_time = '000' + osp.basename(hy_file).split('_')[-2]
 
-        # Get RGB and depth 
+        # Get RGB and depth
         color, depth = get_specific_frame(f'{osp.dirname(args.video)}/{video_prefix}', frame_time, kid=0)
+
+        # The depth video stores millimetres. prep/fp_behave.py divides by 1000
+        # before handing depth to FoundationPose; this never did, so every
+        # threshold downstream -- erode_depth's, register's depth>=0.001 test,
+        # and the mesh's own metre-scale geometry -- was being compared against
+        # numbers a thousand times too large. The symptom was
+        # "guess_translation() valid is empty" and a crash on pose_last, which
+        # read like a bad frame or a bad mesh and was neither.
+        depth = depth.astype(np.float32) / 1000.0
         # Get mask
 
         assert self.scale_ratio == 1.0, "the camera should not be rescaled"
