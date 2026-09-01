@@ -72,6 +72,13 @@ recon_run mkdir -p "$NLF_DIR" "$FP_DIR"
 export MASKS_ROOT="$RECT_DIR" PACKED_ROOT="$RECT_DIR"
 export HY3D_ROOT="$MESH_DIR" NLF_PATH="$NLF_DIR" FP_ROOT="$FP_DIR"
 
+# Exported before job G, not just before job I: step 5.1 inside the prep job
+# reads depth through the same eroding code path FoundationPose tracks with, so
+# it needs the same threshold. Exporting it only for the tracking job left the
+# scale step on FoundationPose's 1mm default, which erases a small distant
+# object entirely.
+export TSTART ZFAR ERODE_DEPTH_THRES REINIT_EVERY DEPTH_HUMAN_BAND DEPTH_MAD_K
+
 job_g=$(recon_sbatch --job-name="s1-$SEQ" \
     scripts/slurm_prep_aligned.sh "$RECT_CLIP")
 log "G  unidepth -> nlf -> smplh -> align  job $job_g"
@@ -84,7 +91,6 @@ log "H  inject triangulated ball depth     job $job_h"
 
 # --- I: FP -> CoCoNet -> optimization ---------------------------------------
 export IDENTIFIER SAVE_NAME OPT_EXTRA
-export TSTART ZFAR ERODE_DEPTH_THRES REINIT_EVERY DEPTH_HUMAN_BAND DEPTH_MAD_K
 job_i=$(recon_sbatch $(recon_dep "$job_h") \
     --job-name="s3-$SEQ" \
     scripts/slurm_fp_onward.sh "$ALIGNED_CLIP")
