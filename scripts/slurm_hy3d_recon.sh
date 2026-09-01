@@ -145,7 +145,16 @@ python -u prep/run_hy3d_recon.py \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} || rc=$?
 log "run_hy3d_recon.py exited rc=$rc"
 
+# The mesh is named for --out_seq when one was given, not for the video it was
+# reconstructed from -- the whole point of that flag is that geometry can come
+# from a camera the pipeline does not track in. Deriving this from the video
+# made the listing point at a directory that never exists.
 SEQ=$(basename "$VIDEO" | sed 's/\.0\.color\.mp4$//')
+for i in "${!EXTRA_ARGS[@]}"; do
+    if [ "${EXTRA_ARGS[$i]}" = "--out_seq" ]; then
+        SEQ="${EXTRA_ARGS[$((i+1))]}"
+    fi
+done
 echo "[hy3d] done. Expected mesh:"
 ls -la "$HY3D_ROOT/${SEQ}_$(printf '%03d' "$FRAME_INDEX")_rgba/" || true
 
