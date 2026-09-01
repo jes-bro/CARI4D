@@ -71,6 +71,7 @@ PIPE_CAM="${PIPE_CAM:-cam04}"
 AUX_CAMS="${AUX_CAMS:-cam01 cam03}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
+log "repo=$REPO"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "seq=$SEQ  pipe_cam=$PIPE_CAM  aux=$AUX_CAMS"
 

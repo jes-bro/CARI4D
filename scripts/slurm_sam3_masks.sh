@@ -79,6 +79,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${SAM3_ENV:-sam3}"
 
 echo "[sam3] host=$(hostname) job=${SLURM_JOB_ID:-<none>} gpu=$CUDA_VISIBLE_DEVICES"
+echo "[sam3] repo=$REPO"
 echo "[sam3] video=$VIDEO"
 echo "[sam3] out_dir=$OUT_DIR  window_json=${WINDOW_JSON:-<none>}"
 echo "[sam3] emit_root=${EMIT_ROOT:-<none>}  clips_json=${CLIPS_JSON:-<none>}"

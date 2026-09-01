@@ -74,6 +74,7 @@ conda activate "${CARI4D_ENV:-newcari4d}"
 
 mkdir -p "$OUT_DIR"
 n_expect=$((END - START + 1))
+echo "[trim] repo=$REPO"
 echo "[trim] window ${START}-${END} (${n_expect} frames) from ${SRC_DIR}"
 
 rc=0

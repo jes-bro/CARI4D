@@ -81,6 +81,7 @@ nlf_path="${NLF_PATH:?set NLF_PATH}"
 export HY3D_MESHES_ROOT="${HY3D_MESHES_ROOT:-$HY3D_ROOT}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
+log "repo=$REPO"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "video=$video"
 log "masks_root=$masks_root  packed_root=$packed_root  hy3d_root=$hy3d_root  nlf_path=$nlf_path"

@@ -95,6 +95,7 @@ if [[ -z "$BLENDER" ]]; then
 fi
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none}"
+log "repo=$REPO"
 log "video=$VIDEO frame=$FRAME_INDEX extra=${EXTRA_ARGS[*]:-none}"
 log "masks_root=$MASKS_ROOT"
 if [[ ! -f $VIDEO ]]; then
