@@ -36,12 +36,28 @@ recon_paths
 
 log() { echo "[recon-solve] $*" >&2; }
 
-# --- FoundationPose knobs, from the verified basketball run ------------------
+# --- FoundationPose knobs ----------------------------------------------------
+# ZFAR and DEPTH_HUMAN_BAND are DERIVED from this clip's own triangulated
+# geometry, not carried over from a basketball at seven metres: the first is
+# beyond the furthest the object is ever seen, the second is the largest
+# object-to-person depth gap actually observed. Both with generous margin,
+# since both fail asymmetrically -- too loose keeps background the mask
+# discards anyway, too tight deletes the object.
+if [ -z "$DRY_RUN" ] && [ -f "$OBJECT_XYZ" ]; then
+    eval "$(python prep/derive_knobs.py --object_xyz "$OBJECT_XYZ" \
+        ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM")"
+fi
 TSTART="${TSTART:-0}"
 ZFAR="${ZFAR:-20}"
+DEPTH_HUMAN_BAND="${DEPTH_HUMAN_BAND:-3.0}"
+
+# Still hand-set, and still a basketball. ERODE_DEPTH_THRES has an automatic
+# form (see the scale step's SCALE_ERODE) that has not been extended here.
+# REINIT_EVERY=1 is justified by a sphere's orientation being unobservable, so
+# re-registering every frame costs nothing -- on an asymmetric object it would pick
+# a different arbitrary orientation each frame, and nothing would say so.
 ERODE_DEPTH_THRES="${ERODE_DEPTH_THRES:-0.05}"
 REINIT_EVERY="${REINIT_EVERY:-1}"
-DEPTH_HUMAN_BAND="${DEPTH_HUMAN_BAND:-3.0}"
 DEPTH_MAD_K="${DEPTH_MAD_K:-3.0}"
 
 # --- optimizer variant ------------------------------------------------------

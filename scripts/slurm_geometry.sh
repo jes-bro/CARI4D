@@ -87,11 +87,22 @@ for c in $AUX_CAMS; do
     hum_views+=(--view "$c:$CLIPS_DIR/$c-4k.0.color.mp4")
 done
 
+# --- 0: knobs that depend on the object, derived rather than typed. The
+#        consensus tolerance has to scale with how big the object appears: two
+#        views agreeing to within a third of its own width are looking at the
+#        same thing, whether that width is 13px or 130px. -------------------
+if [ -z "${TRI_INLIER_PX:-}" ]; then
+    eval "$(python prep/derive_knobs.py --masks_root "$MASKS_DIR" --seq "$SEQ" \
+        --width "${TRI_WIDTH:-796}" --kid 0)"
+fi
+log "inlier_px=${TRI_INLIER_PX:-<default>}"
+
 # --- 1: the ball, in metres -------------------------------------------------
 log "triangulating the object"
 python prep/triangulate_object.py --calib "$CALIB" "${obj_views[@]}" \
     --width "${TRI_WIDTH:-796}" --height "${TRI_HEIGHT:-448}" \
     ${TRI_MAX_RESIDUAL:+--max_residual "$TRI_MAX_RESIDUAL"} \
+    ${TRI_INLIER_PX:+--inlier_px "$TRI_INLIER_PX"} \
     --out "$OBJECT_XYZ"
 
 # --- 2: the report. Printed here so it is in this job's log, next to the run
