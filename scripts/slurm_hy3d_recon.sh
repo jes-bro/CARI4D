@@ -142,3 +142,9 @@ log "run_hy3d_recon.py exited rc=$rc"
 SEQ=$(basename "$VIDEO" | sed 's/\.0\.color\.mp4$//')
 echo "[hy3d] done. Expected mesh:"
 ls -la "$HY3D_ROOT/${SEQ}_$(printf '%03d' "$FRAME_INDEX")_rgba/" || true
+
+# Exit with the reconstruction's status, not the listing's. Without this the
+# job reports COMPLETED however the python went -- `ls ... || true` returns 0 --
+# so a run killed by a bad GPU looked successful in sacct while writing no mesh,
+# and any --dependency=afterok behind it would have started on nothing.
+exit $rc
