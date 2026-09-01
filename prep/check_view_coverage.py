@@ -17,7 +17,9 @@ This reads the mask files stage 1b already wrote and answers the question those
 actually visible to enough cameras, and what would the clip be if that were the
 criterion?
 
-Run from the repo root; needs only h5py and numpy.
+Run from the repo root, in the cari4d env (newcari4d). The work itself is only
+h5py and numpy, but reading the masks goes through prep/triangulate_object,
+which imports cv2 for the fisheye model it does not use here.
 
 Usage:
     python prep/check_view_coverage.py --masks_root work/<seq>/masks --seq <seq>
