@@ -76,7 +76,7 @@ log "D  sapiens $PIPE_CAM (fisheye)        job $job"
 
 for c in $AUX_CAMS; do
     # 4K frames, so more wall time than the script's 1h default.
-    job=$(recon_sbatch --time="${SAPIENS_AUX_TIME:-00:30:00}" \
+    job=$(recon_sbatch --time="${SAPIENS_AUX_TIME:-04:00:00}" \
         --job-name="g1-$c-$SEQ" \
         scripts/slurm_sapiens_pose.sh "$(recon_aux_clip "$c")")
     pose_jobs+=("$job")

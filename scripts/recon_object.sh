@@ -68,10 +68,7 @@ recon_run mkdir -p "$MESH_DIR"
 # trimmed_vids/ inference -- it would infer the same thing, but a path this
 # script already knows should not be re-derived by string surgery downstream.
 export HY3D_ROOT="$MESH_DIR" MASKS_ROOT="$MASKS_DIR"
-# HY3D_TIME is a guess, not a measurement -- no hy3d run has yet succeeded to
-# time. It is short enough to backfill and a timeout is cheap and obvious;
-# raise it if one hits the limit.
-job=$(recon_sbatch --time="${HY3D_TIME:-01:00:00}" --job-name="o1-$SEQ" \
+job=$(recon_sbatch --job-name="o1-$SEQ" \
     scripts/slurm_hy3d_recon.sh "$PIPE_CLIP" "$MESH_FRAME" \
     ${SKIP_HY3D:+--skip_hy3d})
 log "hunyuan3d object reconstruction     job $job"

@@ -62,7 +62,7 @@ export HUMAN="$HUMAN_PROMPT" OBJECT="$OBJECT_PROMPT"
 export EMIT_ROOT="$WORK_ROOT" CLIPS_JSON="$CLIPS_JSON"
 unset NO_TRIM CHUNK
 
-job=$(recon_sbatch --time="${SAM3_FULL_TIME:-01:00:00}" \
+job=$(recon_sbatch --time="${SAM3_FULL_TIME:-06:00:00}" \
     --job-name="c1-$SEQ" scripts/slurm_sam3_masks.sh)
 log "sam3 over the whole take            job $job"
 
