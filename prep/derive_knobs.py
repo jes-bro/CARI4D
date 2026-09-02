@@ -255,8 +255,25 @@ def main():
         # between frames to leave the tracker's basin AND has an orientation
         # nobody can observe anyway.
         if args.mesh and os.path.isfile(args.mesh):
+            # Symmetry comes from the mesh -- it is scale-free, so the
+            # normalised mesh serves. SIZE must not: at this point the metric
+            # mesh does not exist yet (the scale job runs later), and reading
+            # extents off the normalised one reports a 2-metre basketball and
+            # silently concludes it barely moves. So the true diameter comes
+            # from the image instead: an object spanning d pixels at distance Z
+            # with focal f is Z*d/f across, needing nothing that has not
+            # already been measured.
             sym = symmetry_score(args.mesh)
-            diam = object_diameter_m(args.mesh)
+            diam = None
+            if args.masks_root and args.seq:
+                d_px = object_diameter_px(args.masks_root, args.seq, args.kid,
+                                          args.width)
+                if d_px and f:
+                    diam = float(np.median(d_obj)) * d_px / f
+            if diam is None:
+                diam = object_diameter_m(args.mesh)
+                print("  (no masks given: object size read off the mesh, which is "
+                      "wrong unless it is the metric one)", file=sys.stderr)
             step = float(np.median(np.linalg.norm(np.diff(obj["xyz"], axis=0), axis=1))) \
                 if len(obj["xyz"]) > 1 else 0.0
             fast = diam > 0 and (step / diam) > MOTION_PER_DIAMETER

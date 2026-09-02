@@ -60,6 +60,7 @@ MESH_OBJ="$(ls "$MESH_DIR"/*/*_align.obj 2>/dev/null | head -1 || true)"
 if [ -z "$DRY_RUN" ] && [ -f "$OBJECT_XYZ" ]; then
     eval "$(python prep/derive_knobs.py --object_xyz "$OBJECT_XYZ" \
         ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM" \
+        --masks_root "$RECT_DIR" --seq "$SEQ" \
         ${MESH_OBJ:+--mesh "$MESH_OBJ"})"
 fi
 TSTART="${TSTART:-0}"
