@@ -29,6 +29,7 @@ Usage:
 import argparse
 import os
 import os.path as osp
+import re
 import sys
 
 import numpy as np
@@ -134,22 +135,117 @@ def main():
 
     run = longest_run(usable, all_frames, args.gap)
     if run is None:
-        print("\nNo frame reaches the threshold. This clip cannot be triangulated: "
-              "check the aux mask videos before spending anything downstream.")
+        print("\nNo frame reaches the threshold. This clip cannot be triangulated.")
+        print_next(args.seq, args.masks_root, None, None, n, aux)
         return 1
     r_lo, r_hi = run
     print(f"longest usable run: frames {r_lo}-{r_hi} "
           f"({r_hi - r_lo + 1} frames, {(r_hi - r_lo + 1) / 30.0:.1f}s)")
-
-    lead, tail = r_lo - lo, hi - r_hi
-    if lead or tail:
-        print(f"\nThe clip carries {lead} frame(s) before and {tail} after that window "
-              f"which no\npair of views can place in 3D. Those fall back to monocular "
-              f"depth in the\ninjection step. Re-emitting the clip as {r_lo}-{r_hi} "
-              f"would drop them.")
-    else:
-        print("\nEvery frame of this clip is triangulatable; nothing to tighten.")
+    print_next(args.seq, args.masks_root, r_lo, r_hi, n, aux)
     return 0
+
+
+def take_for(work, seq):
+    """The take a clip came from, read off the filesystem, or "<take>".
+
+    Stage 1a symlinks the pipeline video into the take it came from, so the
+    take name is already on disk:
+
+        work/<base>/src/<base>.0.color.mp4
+            -> <takes_root>/<TAKE>/frame_aligned_videos/downscaled/448/<cam>.mp4
+
+    Reading it there rather than from a list of sequences keeps this working for
+    any capture and any object, including ones no split file has heard of. Clip
+    names are <base><letter>[t], and the symlink lives in the take-level
+    directory, so the trailing letters come off to find it.
+
+    This exists only so the printed command can be pasted rather than edited; a
+    missing symlink is not an error, just a placeholder.
+    """
+    base = re.sub(r"[a-z]+$", "", seq)
+    for d in (work, osp.join(osp.dirname(osp.normpath(work)), base)):
+        src = osp.join(d, "src")
+        if not osp.isdir(src):
+            continue
+        for name in sorted(os.listdir(src)):
+            target = osp.realpath(osp.join(src, name))
+            if "/frame_aligned_videos/" in target:
+                return osp.basename(target.split("/frame_aligned_videos/")[0])
+    return "<take>"
+
+
+def print_next(seq, masks_root, lo, hi, n_frames, aux, min_frames=60):
+    """Say what to do about this coverage, with the numbers filled in.
+
+    A diagnostic that stops at the diagnosis leaves the reader to work out the
+    consequence, and the consequence here is a command with two frame numbers
+    in it that nobody should be transcribing by eye.
+    """
+    # Commands here are meant to be pasted from the repo root, where the
+    # relative form is what everything else prints. A work directory outside
+    # the repo relativises to a stack of "..", which is worse than absolute.
+    work = osp.dirname(osp.normpath(masks_root))
+    rel = work
+    try:
+        candidate = osp.relpath(work, os.getcwd())
+        if not candidate.startswith(".."):
+            rel = candidate
+    except ValueError:
+        pass
+
+    take = take_for(work, seq)
+
+    print()
+    print("  ============================================================")
+    print("   WHAT TO DO NEXT")
+    print("  ============================================================")
+
+    # An EgoExo4D capture has four exo cameras, so one view acting as the
+    # pipeline camera leaves three aux. Fewer than that means a masking job
+    # failed, not that a camera was useless -- and a missing camera is the most
+    # common reason coverage looks bad, so say it before suggesting a trim.
+    if len(aux) < 3:
+        print(f"   Only {len(aux)} aux view(s) got masked, out of the 3 a four-camera")
+        print("   capture should give. A missing one is usually a failed job, not a")
+        print("   useless camera, and re-running it may fix the coverage outright:")
+        print()
+        print("       sacct -u $USER --starttime now-1day \\")
+        print("           --format=JobID%14,JobName%34,State,ExitCode \\")
+        print(f"           | grep '{seq}'")
+        print()
+
+    if lo is None:
+        print("   Nothing to trim to. Look at the aux mask videos:")
+        print(f"       ls {rel}/masks/*_sam3_vis.mp4")
+        print("   then re-run step 3 with different prompts, or drop this clip.")
+        print("  ============================================================")
+        return
+
+    kept = hi - lo + 1
+    if kept == n_frames:
+        print("   Every frame is triangulatable. No trim needed -- go to step 5:")
+        print()
+        print(f"       TAKE={take} SEQ={seq} bash scripts/recon_geometry.sh")
+    elif kept < min_frames:
+        print(f"   The usable run is only {kept} frames ({kept / 30.0:.1f}s), under the")
+        print(f"   {min_frames} this pipeline treats as reconstructable. Trimming would")
+        print("   leave too little. Better options, in order:")
+        print()
+        print("     1. check whether a camera's masking failed (above) and re-run it")
+        print("     2. drop this clip and use the others from this take")
+        print()
+        print("   If you want it anyway:")
+        print()
+        print(f"       python prep/retrim_clip.py --work {rel} --lo {lo} --hi {hi}")
+    else:
+        print(f"   Trim to the covered part -- {kept} of {n_frames} frames survive:")
+        print()
+        print(f"       python prep/retrim_clip.py --work {rel} --lo {lo} --hi {hi}")
+        print()
+        print(f"   That writes {seq}t. Use THAT name from step 5 on:")
+        print()
+        print(f"       TAKE={take} SEQ={seq}t bash scripts/recon_geometry.sh")
+    print("  ============================================================")
 
 
 if __name__ == "__main__":

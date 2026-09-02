@@ -11,6 +11,11 @@
 #
 # The columns are the artifacts each stage produces:
 #
+# Step numbers match the written instructions:
+#   1 recon_clips   2 look at the clips     3 recon_masks    4 check coverage
+#   5 recon_geometry  6 pick_object_frame   7 recon_object   8 check both
+#   9 recon_solve   10 watch the render    11 replay in isaacgym
+#
 #   clip     the clip's own masks and trimmed video, from recon_clips.sh
 #   aux      the other cameras masked, from recon_masks.sh
 #   geom     triangulated object and human, plus the rectified clip
@@ -111,37 +116,39 @@ for d in "$WORK_ROOT"/*/; do
 
     if [ ! -e "$d/masks/${seq}_masks_k0.h5" ]; then
         echo "  incomplete -- this clip has no masks of its own."
-        echo "  Re-run recon_clips.sh for its take."
+        echo "  Re-run step 1 (recon_clips.sh) for its take."
     elif [ ! -e "$(echo "$d"/masks/cam*-4k_masks_k0.h5 | cut -d' ' -f1)" ]; then
-        echo "  needs: the other cameras masked"
+        echo "  NEXT: step 3 -- mask the other cameras"
         echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_masks.sh"
     elif [ ! -e "$d/geom/object_xyz.npz" ]; then
-        echo "  needs: geometry -- but check coverage first"
+        echo "  NEXT: step 4 -- can two cameras see the object?"
         echo
         echo "      python prep/check_view_coverage.py \\"
         echo "          --masks_root $rel/masks --seq $seq"
         echo
-        echo "  then, if it says every frame is triangulatable:"
+        echo "  then step 5 -- geometry, if every frame is triangulatable:"
         echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_geometry.sh"
         echo
-        echo "  if it reports a shorter usable run, cut the clip down first:"
+        echo "  or, if step 4 reports a shorter usable run, cut the clip first:"
         echo
         echo "      python prep/retrim_clip.py --work $rel --lo <first> --hi <last>"
-        echo "      (that makes ${seq}t -- use the new name from then on)"
+        echo "      (that makes ${seq}t -- use the new name from step 5 on)"
     elif [ ! -e "$(echo "$d"/meshes/*/*_align.obj | cut -d' ' -f1)" ]; then
-        echo "  needs: the object reconstructed"
+        echo "  NEXT: step 6 -- pick the frame to reconstruct the object from"
         echo
         echo "      python prep/pick_object_frame.py --work $rel"
         echo
-        echo "  then run the MESH_CAM/MESH_FRAME command it prints."
+        echo "  then step 7 -- the MESH_CAM/MESH_FRAME command it prints."
     elif [ ! -e "$(echo output/opt/*/"$seq".pth | cut -d' ' -f1)" ]; then
-        echo "  needs: the reconstruction"
+        echo "  NEXT: step 9 -- the reconstruction itself"
+        echo "  (step 8, the geometry and mesh checks, comes first if you have"
+        echo "   not looked at them)"
         echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_solve.sh"
     else
-        echo "  DONE."
+        echo "  DONE through step 9. Step 10 is to watch it."
         echo
         echo "  Watch it:      ls -lat output/viz-pred/ | head -3"
         echo "  Object size:   grep -A4 'resulting object size' \$(ls -t recon-scale-*.out | head -1)"
