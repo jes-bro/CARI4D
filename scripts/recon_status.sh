@@ -40,7 +40,7 @@ c = w.get('chosen')
 if not c:
     sys.exit(0)
 n, fps = c['n_frames'], w.get('fps', 30.0) or 30.0
-print(f\"take frames {c['lo']}-{c['hi']}  ({n} frames, {n/fps:.1f} s)\")
+print(f\"{c['lo']}-{c['hi']} of the take  ({n} frames, {n/fps:.1f} s)\")
 " "$1" 2>/dev/null
 }
 
@@ -99,12 +99,14 @@ for d in "$WORK_ROOT"/*/; do
 
     echo
     echo "──────────────────────────────────────────────────────────────────"
-    printf '  %s\n' "$seq"
-    printf '  take:  %s\n' "$take"
+    # Every line labelled, including the name -- and the name is labelled "seq"
+    # because that is the variable it gets pasted into.
+    printf '  seq:    %s\n' "$seq"
+    printf '  take:   %s\n' "$take"
     win="$(clip_window "$d/window.json")"
-    [ -n "$win" ] && printf '  clip:  %s\n' "$win"
+    [ -n "$win" ] && printf '  frames: %s\n' "$win"
     [ -f "$d/masks/trimmed_vids/${seq}.0.color.mp4" ] && \
-        printf '  watch: %s\n' "$rel/masks/trimmed_vids/${seq}.0.color.mp4"
+        printf '  watch:  %s\n' "$rel/masks/trimmed_vids/${seq}.0.color.mp4"
     echo
 
     if [ ! -e "$d/masks/${seq}_masks_k0.h5" ]; then
