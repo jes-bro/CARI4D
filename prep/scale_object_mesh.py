@@ -22,13 +22,14 @@ object is.
 
 The shape stays the reconstruction's. Only the size is measured.
 
-WHY A HIGH PERCENTILE, NOT THE MEDIAN. The mesh is normalised so that its
-LONGEST axis spans the unit range, so the scale factor has to match that axis.
-A view sees whatever cross-section the object presents to it, so for a
-non-round object the measurements span its dimensions rather than repeating
-one. The upper percentile approximates the longest axis while staying robust to
-the single inflated mask that a plain maximum would seize on. For a sphere
-every view agrees and the percentile, median and maximum coincide.
+MATCHING LIKE WITH LIKE. A view sees whatever cross-section the object presents
+to it, so the measurements describe a TYPICAL apparent width, not any
+particular axis. The mesh is compared on the same footing: its median extent,
+not its longest. Scaling the longest axis to a typical observed width would
+inflate every object by its own aspect ratio, and taking an upper percentile of
+the observations to reach the longest axis instead just tracks mask-edge noise
+-- on the basketball that read 0.274m where the four views' median said 0.254m
+and the true diameter is 0.239m.
 
 Run from the repo root in the cari4d env.
 
@@ -51,10 +52,11 @@ import numpy as np
 
 sys.path.append(os.getcwd())
 
-# Percentile of the per-view measurements taken as the object's longest axis.
-# High enough to reach that axis rather than a typical cross-section, low
-# enough that one bloated mask cannot set it.
-LONGEST_AXIS_PCT = 90
+# Masks run a few percent wide, so every apparent width is slightly inflated
+# and the object comes out a little large. Reported, not corrected: the bias
+# depends on the segmentation, and a fudge factor here would be exactly the
+# hand-tuned constant this file exists to remove.
+SIZE_PCT = 50
 
 
 def parse_args():
@@ -70,7 +72,9 @@ def parse_args():
     p.add_argument("--out_root", required=True,
                    help="where the metric copy goes (the -metric directory)")
     p.add_argument("--kid", type=int, default=0)
-    p.add_argument("--pct", type=float, default=LONGEST_AXIS_PCT)
+    p.add_argument("--pct", type=float, default=SIZE_PCT,
+                   help="percentile of the per-view measurements to use "
+                        "(default: 50, the median)")
     p.add_argument("--dry_run", action="store_true")
     return p.parse_args()
 
@@ -176,10 +180,16 @@ def main():
 
     import trimesh
     mesh = trimesh.load(args.mesh, process=False)
-    longest = float(max(mesh.extents))
-    scale = size_m / longest
-    print(f"\nmesh's longest axis {longest:.3f} units -> {size_m:.3f} m, "
-          f"scale {scale:.4f}")
+    # The mesh's MEDIAN extent, against the views' median apparent width: the
+    # observations describe a typical cross-section, so the mesh is measured
+    # the same way. Using its longest axis here would inflate every object by
+    # its own aspect ratio.
+    mesh_typical = float(np.median(mesh.extents))
+    scale = size_m / mesh_typical
+    print(f"\nmesh extents {np.round(mesh.extents, 3)} units, median "
+          f"{mesh_typical:.3f}")
+    print(f"observed p{args.pct:g} width {size_m:.3f} m -> scale {scale:.4f}, "
+          f"giving a longest axis of {max(mesh.extents) * scale:.3f} m")
 
     os.makedirs(args.out_root, exist_ok=True)
     dst = scaled_copy(args.mesh, args.out_root, scale, args.dry_run)

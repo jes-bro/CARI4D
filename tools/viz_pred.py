@@ -15,6 +15,7 @@ python tools/viz_pred.py -pf outputs/results/HORefine-Jloss-filter-unidepth-allo
 
 """
 import glob
+import time
 
 import cv2
 import sys, os
@@ -320,7 +321,12 @@ class PredVisualizer(FPBehaveVideoProcessor):
 
         # writer
         pred_dir = osp.basename(osp.dirname(args.pred_file))
-        save_name = f'{pred_dir}_nosphere{args.no_sphere}-1euro-{args.filter_oneeuro}+{seq}.mp4'
+        # Timestamped, because a fixed name makes a re-render indistinguishable
+        # from a stale one -- you look at the same file, see the same thing, and
+        # cannot tell whether the run you just did changed anything.
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        save_name = (f'{pred_dir}_nosphere{args.no_sphere}'
+                     f'-1euro-{args.filter_oneeuro}+{seq}_{stamp}.mp4')
         out_path = osp.join(out_root, save_name)
         vw = imageio.get_writer(out_path, 'FFMPEG', fps=30)
         self.side_view_z = None 
