@@ -227,14 +227,36 @@ def print_next(seq, masks_root, lo, hi, n_frames, aux, min_frames=60):
         print()
         print(f"       TAKE={take} SEQ={seq} bash scripts/recon_geometry.sh")
     elif kept < min_frames:
-        print(f"   The usable run is only {kept} frames ({kept / 30.0:.1f}s), under the")
-        print(f"   {min_frames} this pipeline treats as reconstructable. Trimming would")
-        print("   leave too little. Better options, in order:")
+        # A missing camera is a repairable cause, so the verdict is held back
+        # until it has been ruled out -- "drop it" and "fix cam01 first" in the
+        # same block is a contradiction to act on.
+        verdict = "NOT USABLE YET." if len(aux) < 3 else "DROP THIS CLIP."
+        print(f"   {verdict} Only {kept} frames ({kept / 30.0:.1f}s) run back to back,")
+        print(f"   against the {min_frames} this pipeline treats as reconstructable.")
         print()
-        print("     1. check whether a camera's masking failed (above) and re-run it")
-        print("     2. drop this clip and use the others from this take")
+        print("   The count above may look better than that -- frames can be")
+        print("   triangulatable but scattered. Only an unbroken run counts: the")
+        print("   result is a trajectory, and a frame where the object cannot be")
+        print("   placed in 3D is a hole in it, not a frame to interpolate over.")
         print()
-        print("   If you want it anyway:")
+        if len(aux) < 3:
+            print("   Fix the missing camera first (above). A view that never got")
+            print("   masked is the most likely reason the run breaks, and getting")
+            print("   it back may make this clip usable after all -- re-run the")
+            print("   coverage check afterwards before giving up on it.")
+        else:
+            print("   Every camera is masked, so nothing here is broken to re-run.")
+            print("   The side cameras simply do not see the object for most of this")
+            print("   clip -- look at the per-view percentages above. Where only one")
+            print("   view holds it, there is no second ray and no 3D point.")
+        print()
+        print("   Dropping it means exactly that: run nothing further on it. No")
+        print("   later stage picks a clip up on its own, so leaving the directory")
+        print("   in place costs nothing. Move to the take's other clips:")
+        print()
+        print(f"       bash scripts/recon_status.sh {re.sub(r'[a-z]+$', '', seq)}")
+        print()
+        print(f"   If you want it anyway, against the above -- {kept} frames:")
         print()
         print(f"       python prep/retrim_clip.py --work {rel} --lo {lo} --hi {hi}")
     else:
