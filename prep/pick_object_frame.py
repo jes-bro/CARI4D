@@ -54,6 +54,7 @@ Usage:
 import argparse
 import os
 import os.path as osp
+import re
 import sys
 
 import cv2
@@ -338,6 +339,28 @@ def build_sheet(masks_root, kid, picks, tile, out_path):
     return out_path
 
 
+def take_for(work, seq):
+    """The take a clip came from, read off the filesystem, or "<take>".
+
+    Stage 1a symlinks the pipeline video into the take it came from, so the
+    take name is already on disk and the printed command can be pasted rather
+    than edited. Clip names are <base><letter>[t] and the symlink lives in the
+    take-level directory, so the trailing letters come off to find it. A
+    missing symlink is not an error, just a placeholder.
+    """
+    base = re.sub(r"[a-z]+$", "", seq)
+    root = osp.dirname(osp.normpath(work))
+    for d in (work, osp.join(root, base)):
+        src = osp.join(d, "src")
+        if not osp.isdir(src):
+            continue
+        for name in sorted(os.listdir(src)):
+            target = osp.realpath(osp.join(src, name))
+            if "/frame_aligned_videos/" in target:
+                return osp.basename(target.split("/frame_aligned_videos/")[0])
+    return "<take>"
+
+
 def main():
     """Score every aux view's frames, print the ranking and write the sheet."""
     args = parse_args()
@@ -395,7 +418,7 @@ def main():
     best = picks[0]
     print(f"\nLook at the sheet, then reconstruct from the tile you like:")
     print(f"  MESH_CAM={best['view'].replace('-4k', '')} MESH_FRAME={best['frame']} "
-          f"TAKE=<take> SEQ={seq} bash scripts/recon_object.sh")
+          f"TAKE={take_for(work, seq)} SEQ={seq} bash scripts/recon_object.sh")
     return 0
 
 
