@@ -69,22 +69,6 @@ CAMS=${CAMS:-cam01 cam02 cam03 cam04}
 REPO="${REPO:-${SLURM_SUBMIT_DIR:-/simurgh2/projects/ret-hoi/CARI4D}}"
 cd "$REPO"
 
-# conda may not be on PATH at all: sbatch --export=ALL hands the job the
-# SUBMITTING shell's environment, so a terminal that never initialised conda
-# produces jobs that cannot find it -- and the failure is "conda: command not
-# found" from inside a queued job, an hour after the mistake.
-if ! command -v conda >/dev/null 2>&1; then
-    for _rc in "$HOME/.bashrc" "$HOME/.bash_profile" /etc/profile.d/conda.sh; do
-        [ -f "$_rc" ] && . "$_rc" >/dev/null 2>&1 || true
-        command -v conda >/dev/null 2>&1 && break
-    done
-fi
-command -v conda >/dev/null 2>&1 || {
-    echo "ERROR: conda not found. It is not on PATH here and sourcing your shell" >&2
-    echo "       profile did not provide it. Run 'source ~/.bashrc' in the shell" >&2
-    echo "       you submit from, or set CONDA_EXE." >&2
-    exit 1
-}
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CARI4D_ENV:-newcari4d}"
 
