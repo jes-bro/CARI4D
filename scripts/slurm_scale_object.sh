@@ -13,24 +13,27 @@
 #SBATCH --mail-user=jesb@stanford.edu
 #SBATCH --mail-type=ALL
 
-# demo-custom.sh step 5.1 -- the object's metric scale -- moved to AFTER the
-# depth injection.
+# The object's metric size, MEASURED across the calibrated views rather than
+# searched for.
 #
-# Why it moved. The scale is recovered by rendering the mesh at a range of
-# scales and asking which one explains the image. But a silhouette cannot
-# separate scale from distance: a small object close and a large object far
-# project identically. Only depth breaks that tie, and before the injection the
-# depth inside the object's mask is the monocular estimate -- the one that read
-# 6.15m to 15.94m for a ball genuinely at 6.5m, and the reason the injection
-# step exists at all.
+# A single-image reconstruction has no scale in it: a photograph of a
+# basketball and one of a beach ball are identical up to size, so Hunyuan3D
+# returns shape in arbitrary units and the metres must come from elsewhere. The
+# released pipeline searches for them -- render at thirty candidate sizes, keep
+# whichever best explains one image -- because with one camera size and distance
+# are degenerate and fitting is the only option.
 #
-# Run against that, the search walked to the smallest scale it was offered:
-# 0.03, giving a basketball 5.8cm across instead of 24cm. Position was right to
-# a few centimetres, size was a quarter of true, and the ball rendered about
-# three pixels wide -- invisible, while every number upstream looked healthy.
+# That search produced a 5.8cm basketball here, four times running: it kept
+# selecting the smallest candidate it was offered while every number upstream
+# looked healthy, and the ball rendered three pixels wide, which reads as "no
+# ball" rather than as a scale error.
 #
-# After the injection the object's depth is the triangulated one, centimetre
-# class, and the degeneracy is broken.
+# This pipeline is not single-camera. The object's position is triangulated
+# from several calibrated views to centimetre accuracy, and a distance plus an
+# apparent size IS a size: D = Z * d_px / f, one measurement per view per
+# frame, hundreds of them. Nothing in it knows what the object is.
+#
+# SCALE_METHOD=search restores the old behaviour for comparison.
 #
 #   MASKS_ROOT=work/<seq>/rect HY3D_ROOT=work/<seq>/meshes \
 #       sbatch scripts/slurm_scale_object.sh work/<seq>/rect-aligned/<seq>.0.color.mp4
@@ -65,16 +68,31 @@ SCALE_ERODE="${SCALE_ERODE:-auto}"
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
 log "repo=$REPO"
 log "video=$VIDEO (injected)"
-log "masks_root=$masks_root  hy3d_root=$hy3d_root  scale_erode=$SCALE_ERODE"
+log "masks_root=$masks_root  hy3d_root=$hy3d_root  method=${SCALE_METHOD:-measure}"
 
 depth_video=${VIDEO/.color.mp4/.depth-reg.mp4}
 for required in "$VIDEO" "$depth_video" "$masks_root" "$hy3d_root"; do
     [ -e "$required" ] || { echo "ERROR: missing required input: $required" >&2; exit 1; }
 done
 
-python tools/estimate_scale_video.py --wild_video --video "$VIDEO" \
-    --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric" \
-    --erode_depth_thres "$SCALE_ERODE"
+if [ "${SCALE_METHOD:-measure}" = "measure" ]; then
+    : "${OBJECT_XYZ:?set OBJECT_XYZ}" "${CALIB:?set CALIB}" "${MASKS_DIR:?set MASKS_DIR}"
+    MESH_SRC="$(ls "$hy3d_root"/*/*_align.obj 2>/dev/null | head -1 || true)"
+    [ -n "$MESH_SRC" ] || { echo "ERROR: no mesh under $hy3d_root" >&2; exit 1; }
+    # The same --view list triangulation used: fisheye masks with the fisheye
+    # calibration, each at its own resolution.
+    views=(--view "${PIPE_CAM:-cam04}:$MASKS_DIR:$SEQ")
+    for c in ${AUX_CAMS:-}; do views+=(--view "$c:$MASKS_DIR:$c-4k"); done
+    log "measuring the object across $(( ${#views[@]} / 2 )) view(s)"
+    python prep/scale_object_mesh.py --mesh "$MESH_SRC" \
+        --object_xyz "$OBJECT_XYZ" --calib "$CALIB" "${views[@]}" \
+        --out_root "$hy3d_root-metric"
+else
+    log "SCALE_METHOD=search: the render-and-fit path"
+    python tools/estimate_scale_video.py --wild_video --video "$VIDEO" \
+        --masks_root "$masks_root" --hy3d_root "$hy3d_root" -o "$hy3d_root-metric" \
+        --erode_depth_thres "$SCALE_ERODE"
+fi
 
 # The scale is the whole output, so report it rather than leaving it to be
 # discovered three jobs later as an object too small to see.
