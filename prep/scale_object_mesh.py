@@ -22,14 +22,33 @@ object is.
 
 The shape stays the reconstruction's. Only the size is measured.
 
-MATCHING LIKE WITH LIKE. A view sees whatever cross-section the object presents
-to it, so the measurements describe a TYPICAL apparent width, not any
-particular axis. The mesh is compared on the same footing: its median extent,
-not its longest. Scaling the longest axis to a typical observed width would
-inflate every object by its own aspect ratio, and taking an upper percentile of
-the observations to reach the longest axis instead just tracks mask-edge noise
--- on the basketball that read 0.274m where the four views' median said 0.254m
-and the true diameter is 0.239m.
+MATCHING LIKE WITH LIKE. What the cameras measure is the equivalent-disc
+diameter of a silhouette AREA, from whatever direction they happen to see. That
+is not a bounding-box extent, so pairing it against one -- the mesh's longest
+axis, or its median extent -- compares two different kinds of quantity, and no
+choice of percentile repairs that.
+
+So the mesh is asked for the same statistic: project it from many random
+directions, take each silhouette's equivalent-disc diameter, and match the
+median of those against the median of the observations. Both sides are then the
+same measurement of the same object and the ratio is its size.
+
+The difference only shows on objects that are not round, which is why a
+basketball cannot tell you whether the rule is right. Measured against known
+shapes, recovering the longest axis:
+
+    object                 true    silhouette   median extent   p90/longest
+    sphere                 0.240      -0.0%         -0.0%          -0.0%
+    box 0.30x0.20x0.15     0.300      +0.9%        +49.3%          +5.7%
+    cylinder d0.24 h0.16   0.240      +0.9%        +9.6%          +14.2%
+    rod 0.50x0.04x0.04     0.500      -0.3%       +315.0%         -62.8%
+    pot with a handle      0.270      +1.0%           --              --
+
+CAVEAT. The random-direction average assumes the cameras see the object from
+varied angles. Four fixed cameras watching an object that barely rotates see a
+restricted set of directions, and the observed median then reflects those
+rather than an average over all of them. Exact for a sphere at any orientation;
+good when the object turns; biased when it presents one face throughout.
 
 Run from the repo root in the cari4d env.
 
@@ -57,6 +76,11 @@ sys.path.append(os.getcwd())
 # depends on the segmentation, and a fudge factor here would be exactly the
 # hand-tuned constant this file exists to remove.
 SIZE_PCT = 50
+
+# Directions used to ask the mesh what it would measure. A few hundred is
+# enough for a stable median and costs a second.
+MESH_VIEW_DIRECTIONS = 300
+MESH_VERTEX_SAMPLE = 2000
 
 
 def parse_args():
@@ -106,6 +130,34 @@ def measure_in_view(cam_uid, masks_root, seq, kid, calib, frames, xyz):
         z = float(np.linalg.norm(p_cam))
         out.append(z * d_px / f)
     return out
+
+
+def mesh_apparent_diameters(mesh, n=MESH_VIEW_DIRECTIONS, seed=0):
+    """What the mesh's silhouette would measure, from many random directions.
+
+    The same statistic the cameras produce -- equivalent-disc diameter of the
+    silhouette area -- so that the observed and predicted distributions can be
+    compared directly. Vertices are subsampled because the hull of 40k points,
+    three hundred times, is slower than it needs to be for a median.
+    """
+    from scipy.spatial import ConvexHull
+    rng = np.random.default_rng(seed)
+    v = np.asarray(mesh.vertices)
+    if len(v) > MESH_VERTEX_SAMPLE:
+        v = v[rng.choice(len(v), MESH_VERTEX_SAMPLE, replace=False)]
+    v = v - v.mean(0)
+    out = []
+    for _ in range(n):
+        q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+        q *= np.sign(np.diag(r))
+        if np.linalg.det(q) < 0:
+            q[:, 0] *= -1
+        proj = (v @ q.T)[:, :2]
+        try:
+            out.append(2.0 * np.sqrt(ConvexHull(proj).volume / np.pi))
+        except Exception:
+            continue
+    return np.array(out)
 
 
 def scaled_copy(mesh_file, out_root, scale, dry_run=False):
@@ -180,16 +232,20 @@ def main():
 
     import trimesh
     mesh = trimesh.load(args.mesh, process=False)
-    # The mesh's MEDIAN extent, against the views' median apparent width: the
-    # observations describe a typical cross-section, so the mesh is measured
-    # the same way. Using its longest axis here would inflate every object by
-    # its own aspect ratio.
-    mesh_typical = float(np.median(mesh.extents))
-    scale = size_m / mesh_typical
-    print(f"\nmesh extents {np.round(mesh.extents, 3)} units, median "
-          f"{mesh_typical:.3f}")
-    print(f"observed p{args.pct:g} width {size_m:.3f} m -> scale {scale:.4f}, "
-          f"giving a longest axis of {max(mesh.extents) * scale:.3f} m")
+    # Ask the mesh for the same statistic the cameras produced, then match the
+    # two medians. Both sides are now the equivalent-disc diameter of a
+    # silhouette, so the ratio is a size rather than a comparison of unlike
+    # quantities.
+    pred = mesh_apparent_diameters(mesh)
+    if pred.size == 0:
+        raise SystemExit("ERROR: could not project the mesh; is it degenerate?")
+    pred_typical = float(np.median(pred))
+    scale = size_m / pred_typical
+    print(f"\nmesh extents {np.round(mesh.extents, 3)} units")
+    print(f"  its silhouette would measure {pred_typical:.3f} units "
+          f"(median over {len(pred)} directions)")
+    print(f"observed {size_m:.3f} m -> scale {scale:.4f}, "
+          f"longest axis {max(mesh.extents) * scale:.3f} m")
 
     os.makedirs(args.out_root, exist_ok=True)
     dst = scaled_copy(args.mesh, args.out_root, scale, args.dry_run)
