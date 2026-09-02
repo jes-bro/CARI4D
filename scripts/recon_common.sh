@@ -235,26 +235,49 @@ if w:
 }
 
 
+# Where the guidance is also written, so it survives the terminal. Jobs queue
+# for hours; a person closes the window, comes back, and the instructions are
+# gone. Scrollback is not a place to keep the only copy of the next step.
+recon_notes_file() { echo "${WORK:-.}/NEXT.txt"; }
+
 recon_check() {
     # Print the CHECK block a stage ends with: what to look at before moving on.
     #
     # Loud and fully substituted on purpose. Every path a reader has to fill in
     # themselves is a chance to fill it in wrong, and every check that lives in
     # a separate document is a check that gets skipped.
+    #
+    # Also STARTS the notes file, so `cat <work>/NEXT.txt` recovers everything
+    # this stage said, whenever you get back to it.
+    local f; f="$(recon_notes_file)"
+    [ -n "$DRY_RUN" ] || { mkdir -p "$(dirname "$f")" 2>/dev/null; \
+        printf '%s\n' "written $(date -u '+%Y-%m-%d %H:%M UTC') by $(basename "$0")" > "$f"; }
     echo "" >&2
     echo "  ---- CHECK THIS FIRST, when the jobs above have finished ----" >&2
     local line
-    for line in "$@"; do echo "      $line" >&2; done
+    for line in "$@"; do
+        echo "      $line" >&2
+        [ -n "$DRY_RUN" ] || echo "  $line" >> "$f"
+    done
 }
 
 recon_next() {
-    # Print the NEXT COMMAND block, ready to copy.
+    # Print the NEXT COMMAND block, ready to copy, and append it to the notes.
+    local f; f="$(recon_notes_file)"
     echo "" >&2
     echo "  ============================================================" >&2
     echo "   NEXT COMMAND" >&2
     echo "  ============================================================" >&2
+    [ -n "$DRY_RUN" ] || printf '\n=== NEXT COMMAND ===\n' >> "$f"
     local line
-    for line in "$@"; do echo "   $line" >&2; done
+    for line in "$@"; do
+        echo "   $line" >&2
+        [ -n "$DRY_RUN" ] || echo "$line" >> "$f"
+    done
     echo "  ============================================================" >&2
     echo "" >&2
+    if [ -z "$DRY_RUN" ]; then
+        echo "  (also saved: cat $f)" >&2
+        echo "" >&2
+    fi
 }
