@@ -136,10 +136,19 @@ job_j=$(recon_sbatch $(recon_dep "$job_i") \
 log "J  render                             job $job_j"
 
 recon_check \
-    "ls -lat output/viz-pred/ | head -3" \
-    "# watch the newest mp4 -- that is the reconstruction over the source video" \
+    "tail -18 recon-scale-${job_s}.out" \
+    "# the object's MEASURED size, and whether the views agreed on it." \
+    "# Views disagreeing badly means a mask is on something else." \
     "" \
-    "result: $RESULT_DIR/$SEQ.pth"
+    "ls -lat output/viz-pred/ | head -3" \
+    "# watch the newest mp4 (the filename is timestamped, so it is the fresh one)." \
+    "# The object is drawn with its own texture, so a correct render LOOKS LIKE" \
+    "# the real object -- judge whether it tracks, not whether it stands out." \
+    "" \
+    "result: $RESULT_DIR/$SEQ.pth" \
+    "" \
+    "# Re-running this stage? Delete the scaled mesh first, or the scale step" \
+    "# reuses its cached result:   rm -rf $MESH_DIR-metric"
 recon_next \
     "Nothing -- this clip is done." \
     "" \

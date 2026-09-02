@@ -112,10 +112,20 @@ job=$(recon_sbatch --job-name="o1-$SEQ" \
     --out_seq "$SEQ" ${SKIP_HY3D:+--skip_hy3d})
 log "hunyuan3d object reconstruction     job $job"
 
-MESH_OBJ="$MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba/${SEQ}_$(printf '%03d' "$MESH_FRAME")_align.obj"
+MESH_DIR_F="$MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba"
 recon_check \
-    "python -c \"import trimesh,sys; m=trimesh.load(sys.argv[1],process=False); e=m.extents; print('extents',e,'ratio',round(max(e)/min(e),3))\" $MESH_OBJ" \
-    "# ratio near 1.0 is a ball. Much above ~1.15 means the reconstruction failed --" \
-    "# pick a different camera or frame and run this stage again."
+    "ls $MESH_DIR_F" \
+    "# LOOK AT THE MESH. The _rgba.png is the crop it was given; the _align.obj" \
+    "# is what came out. Orbit renders, if you want them:" \
+    "#   \$(ls -d Hunyuan3D-2/blender-*/blender) -b -P scripts/render_obj_views.py \\" \
+    "#       -- $MESH_DIR_F/${SEQ}_$(printf '%03d' "$MESH_FRAME")_align.obj /tmp/objviews 4 512" \
+    "#" \
+    "# Judge whether it looks like the object. Its SIZE is not set yet and is not" \
+    "# yours to judge here -- the next stage measures that across all the views" \
+    "# and reports it." \
+    "#" \
+    "# If it is wrong, delete this mesh before trying another frame, or two will" \
+    "# sit side by side and the pipeline will silently take the first:" \
+    "#   rm -rf $MESH_DIR_F"
 recon_next \
     "TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh"

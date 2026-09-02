@@ -95,4 +95,7 @@ recon_next \
     "" \
     "and this one too -- they are independent, run both:" \
     "" \
-    "   python prep/pick_object_frame.py --work $WORK"
+    "   python prep/pick_object_frame.py --work $WORK" \
+    "" \
+    "That one writes a sheet of candidate crops and prints the exact" \
+    "recon_object.sh command for the tile you choose."

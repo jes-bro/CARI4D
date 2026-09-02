@@ -100,8 +100,9 @@ job_f=$(recon_sbatch $(recon_dep "$job_e") \
 log "F  sapiens on the rectified clip      job $job_f"
 
 recon_check \
-    "grep -E 'frames triangulated|reprojection error|joints triangulated per frame|residuals .kept' recon-geom-<jobid>.out" \
-    "# healthy: ~1-2 px reprojection, most frames triangulated, 17 of 17 joints"
+    "grep -E 'frames triangulated|reprojection error|joints triangulated per frame|residuals .kept' recon-geom-${job_e}.out" \
+    "# healthy: ~1-2 px reprojection, most frames triangulated, 17 of 17 joints" \
+    "# a much lower frame count means the views disagree -- check the aux mask videos"
 recon_next \
     "TAKE=$TAKE SEQ=$SEQ bash scripts/recon_solve.sh" \
     "" \
