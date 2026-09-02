@@ -66,31 +66,61 @@ for d in "$WORK_ROOT"/*/; do
 done
 
 echo
-echo "NEXT, per clip:"
 echo
+echo "WHAT TO RUN NEXT"
+
 for d in "$WORK_ROOT"/*/; do
     d="${d%/}"          # no trailing slash: these paths get copy-pasted
     seq="$(basename "$d")"
     [ -n "$FILTER" ] && [[ "$seq" != *"$FILTER"* ]] && continue
     [ -f "$d/clips.json" ] && continue
     take="$(take_for "$seq")"
+    # Relative, because every command here is meant to be run from the repo
+    # root and the absolute form wraps across two lines.
+    rel="${d#$(pwd)/}"
+
+    echo
+    echo "──────────────────────────────────────────────────────────────────"
+    printf '  %s\n' "$seq"
+    printf '  take: %s\n' "$take"
+    echo
 
     if [ ! -e "$d/masks/${seq}_masks_k0.h5" ]; then
-        echo "  $seq: incomplete -- no masks. Re-run recon_clips.sh for its take."
+        echo "  incomplete -- this clip has no masks of its own."
+        echo "  Re-run recon_clips.sh for its take."
     elif [ ! -e "$(echo "$d"/masks/cam*-4k_masks_k0.h5 | cut -d' ' -f1)" ]; then
-        echo "  $seq"
+        echo "  needs: the other cameras masked"
+        echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_masks.sh"
     elif [ ! -e "$d/geom/object_xyz.npz" ]; then
-        echo "  $seq   (check coverage first: python prep/check_view_coverage.py --masks_root $d/masks --seq $seq)"
+        echo "  needs: geometry -- but check coverage first"
+        echo
+        echo "      python prep/check_view_coverage.py \\"
+        echo "          --masks_root $rel/masks --seq $seq"
+        echo
+        echo "  then, if it says every frame is triangulatable:"
+        echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_geometry.sh"
+        echo
+        echo "  if it reports a shorter usable run, cut the clip down first:"
+        echo
+        echo "      python prep/retrim_clip.py --work $rel --lo <first> --hi <last>"
+        echo "      (that makes ${seq}t -- use the new name from then on)"
     elif [ ! -e "$(echo "$d"/meshes/*/*_align.obj | cut -d' ' -f1)" ]; then
-        echo "  $seq"
-        echo "      python prep/pick_object_frame.py --work $d"
-        echo "      then the MESH_CAM/MESH_FRAME command it prints"
+        echo "  needs: the object reconstructed"
+        echo
+        echo "      python prep/pick_object_frame.py --work $rel"
+        echo
+        echo "  then run the MESH_CAM/MESH_FRAME command it prints."
     elif [ ! -e "$(echo output/opt/*/"$seq".pth | cut -d' ' -f1)" ]; then
-        echo "  $seq"
+        echo "  needs: the reconstruction"
+        echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_solve.sh"
     else
-        echo "  $seq: done -- watch output/viz-pred/ and check its size in recon-scale-*.out"
+        echo "  DONE."
+        echo
+        echo "  Watch it:      ls -lat output/viz-pred/ | head -3"
+        echo "  Object size:   grep -A4 'resulting object size' \$(ls -t recon-scale-*.out | head -1)"
     fi
 done
+echo
