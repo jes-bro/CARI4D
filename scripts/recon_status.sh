@@ -26,6 +26,24 @@ FILTER="${1:-}"
 WORK_ROOT="${WORK_ROOT:-$(pwd)/work}"
 MANIFEST="${MANIFEST:-splits/layup-batch.tsv}"
 
+clip_window() {
+    # "take frames 193-299  (107 frames, 3.6 s)" from the clip's own window.json.
+    # A clip name says which take and which drill but nothing about WHICH three
+    # seconds, and that is the thing you need when deciding whether to keep it.
+    python3 -c "
+import json, sys
+try:
+    w = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+c = w.get('chosen')
+if not c:
+    sys.exit(0)
+n, fps = c['n_frames'], w.get('fps', 30.0) or 30.0
+print(f\"take frames {c['lo']}-{c['hi']}  ({n} frames, {n/fps:.1f} s)\")
+" "$1" 2>/dev/null
+}
+
 take_for() {
     # The take a clip came from, by stripping the clip suffix and looking the
     # base sequence up in the manifest. Clip names are <base><letter>[t], and
@@ -82,7 +100,11 @@ for d in "$WORK_ROOT"/*/; do
     echo
     echo "──────────────────────────────────────────────────────────────────"
     printf '  %s\n' "$seq"
-    printf '  take: %s\n' "$take"
+    printf '  take:  %s\n' "$take"
+    win="$(clip_window "$d/window.json")"
+    [ -n "$win" ] && printf '  clip:  %s\n' "$win"
+    [ -f "$d/masks/trimmed_vids/${seq}.0.color.mp4" ] && \
+        printf '  watch: %s\n' "$rel/masks/trimmed_vids/${seq}.0.color.mp4"
     echo
 
     if [ ! -e "$d/masks/${seq}_masks_k0.h5" ]; then
