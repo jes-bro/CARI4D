@@ -70,9 +70,31 @@ class MetricScaleEstimator(BaseBehaveVideoData):
             print(f'{out_file} already exists, skipping...')
             return 
         
-        # get the frame index used to reconstruct the mesh, filename format: <video_prefix>*_<frame_index>_rgba.obj
+        # The mesh's own frame index, from its filename.
         hy_file = sorted(glob(f'{self.args.hy3d_root}/{video_prefix}*/*{video_prefix}*.obj'))[0]
-        frame_time = '000' + osp.basename(hy_file).split('_')[-2]
+        mesh_frame = int(osp.basename(hy_file).split('_')[-2])
+
+        # But the scale is fitted against THIS camera's view, and the mesh's
+        # frame was chosen for a different one -- scripts/recon_object.sh
+        # reconstructs from a 4K aux view where the object is ~8x larger. The
+        # two requirements are genuinely different: the mesh wants the best
+        # picture of the object, the scale wants the best view in the camera
+        # the pipeline tracks in. Conflating them fitted a basketball against a
+        # 114-pixel mask on the clip's worst frame, and the search walked to
+        # the smallest scale it was offered.
+        scale_frame = mesh_frame
+        if args.scale_frame is not None:
+            scale_frame = args.scale_frame
+        elif args.scale_frame_auto:
+            from prep.triangulate_object import load_object_centroids
+            cents, _ = load_object_centroids(args.masks_root, video_prefix, 0,
+                                             min_px=1)
+            if cents:
+                scale_frame = max(cents, key=lambda f: cents[f][2])
+                print(f'scale frame: {scale_frame} '
+                      f'({cents[scale_frame][2]} px, the largest object mask in '
+                      f'this camera) rather than the mesh frame {mesh_frame}')
+        frame_time = f'{scale_frame:06d}' 
 
         # Get RGB and depth
         color, depth = get_specific_frame(f'{osp.dirname(args.video)}/{video_prefix}', frame_time, kid=0)
@@ -134,6 +156,13 @@ if __name__ == '__main__':
                              "the focal length. Must exceed the object's own depth "
                              "change per pixel or the object is erased before its "
                              "scale can be measured")
+    parser.add_argument('--scale_frame', default=None, type=int,
+                        help='frame to fit the scale against. Default: the frame with '
+                             'the largest object mask IN THIS CAMERA, which is not '
+                             'the frame the mesh was reconstructed from')
+    parser.add_argument('--no_scale_frame_auto', dest='scale_frame_auto',
+                        action='store_false',
+                        help="use the mesh's own frame, as before")
     parser.add_argument('--erode_safety', default=3.0, type=float,
                         help='multiple of Z/f used by --erode_depth_thres auto '
                              '(default: 3.0, which reproduces the 0.05 hand-tuned for '
