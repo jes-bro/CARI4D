@@ -49,15 +49,80 @@ print(f\"{c['lo']}-{c['hi']} of the take  ({n} frames, {n/fps:.1f} s)\")
 " "$1" 2>/dev/null
 }
 
+take_dir_for() {
+    # The take directory a clip came from, resolved off the filesystem.
+    #
+    # Stage 1a symlinks the pipeline video into the take, so the answer is
+    # already on disk and does not depend on the clip appearing in any split
+    # file -- which matters the moment this is used on something that is not a
+    # basketball. The symlink lives in the take-level directory, so a clip name
+    # <base><letter>[t] has its trailing letters stripped to find it.
+    local seq="$1" d="$2" base t f
+    base="$(echo "$seq" | sed -E 's/[a-z]+$//')"
+    for cand in "$d/src" "$WORK_ROOT/$base/src"; do
+        [ -d "$cand" ] || continue
+        for f in "$cand"/*; do
+            t="$(readlink -f "$f" 2>/dev/null)" || continue
+            case "$t" in
+                */frame_aligned_videos/*) echo "${t%%/frame_aligned_videos/*}"; return ;;
+            esac
+        done
+    done
+}
+
 take_for() {
-    # The take a clip came from, by stripping the clip suffix and looking the
-    # base sequence up in the manifest. Clip names are <base><letter>[t], and
-    # the base is what the manifest knows.
-    local seq="$1" base
+    # The take's name: from the symlink if it is there, from the manifest if
+    # not. The manifest only knows this batch, so it is the fallback.
+    local seq="$1" d="$2" base tdir
+    tdir="$(take_dir_for "$seq" "$d")"
+    [ -n "$tdir" ] && { basename "$tdir"; return; }
     base="$(echo "$seq" | sed -E 's/[a-z]+$//')"
     [ -f "$MANIFEST" ] || { echo "<take>"; return; }
     awk -F'\t' -v b="$base" '!/^#/ && $2==b {print $1; found=1; exit}
                              END {if (!found) print "<take>"}' "$MANIFEST"
+}
+
+aux_expected() {
+    # How many aux views this take should yield: every exo camera it has, minus
+    # the one driving the pipeline. Counted from the take rather than assumed,
+    # because not every capture has four.
+    local tdir="$1" n
+    [ -n "$tdir" ] || { echo 0; return; }
+    n="$(ls "$tdir"/frame_aligned_videos/cam*.mp4 2>/dev/null | wc -l)"
+    [ "$n" -gt 0 ] && echo $((n - 1)) || echo 0
+}
+
+pipe_cam_for() {
+    # Which camera drives the pipeline, from the same symlink that names the
+    # take: its target is .../downscaled/448/<cam>.mp4. Resolved rather than
+    # assumed, since PIPE_CAM varies by capture.
+    local seq="$1" d="$2" base t f
+    base="$(echo "$seq" | sed -E 's/[a-z]+$//')"
+    for cand in "$d/src" "$WORK_ROOT/$base/src"; do
+        [ -d "$cand" ] || continue
+        for f in "$cand"/*; do
+            t="$(readlink -f "$f" 2>/dev/null)" || continue
+            case "$t" in
+                */frame_aligned_videos/*) basename "$t" .mp4; return ;;
+            esac
+        done
+    done
+}
+
+aux_missing() {
+    # Which aux cameras have no mask file. A partially-masked clip used to read
+    # as fully masked here, because the check was "does any cam*-4k mask
+    # exist" -- and a silently missing camera is the usual reason coverage
+    # later looks bad.
+    local seq="$1" tdir="$2" d="$3" pipe c out=""
+    [ -n "$tdir" ] || return
+    pipe="$(pipe_cam_for "$seq" "$d")"
+    for f in "$tdir"/frame_aligned_videos/cam*.mp4; do
+        c="$(basename "$f" .mp4)"
+        [ "$c" = "$pipe" ] && continue
+        [ -e "$d/masks/${c}-4k_masks_k0.h5" ] || out="${out:+$out }$c"
+    done
+    echo "$out"
 }
 
 mark() { [ -e "$1" ] && printf '  yes ' || printf '   -  '; }
@@ -75,14 +140,24 @@ for d in "$WORK_ROOT"/*/; do
     [ -f "$d/clips.json" ] && continue
 
     has_clip="$d/masks/${seq}_masks_k0.h5"
-    has_aux="$(echo "$d"/masks/cam*-4k_masks_k0.h5 | cut -d' ' -f1)"
     has_geom="$d/geom/object_xyz.npz"
     has_mesh="$(echo "$d"/meshes/*/*_align.obj | cut -d' ' -f1)"
     has_metric="$(echo "$d"/meshes-metric/*/*_align.obj | cut -d' ' -f1)"
     has_result="$(echo output/opt/*/"$seq".pth | cut -d' ' -f1)"
 
+    # A count, not a yes: "2/3" is the case worth seeing, and it used to print
+    # as "yes" because one existing mask satisfied the check.
+    tdir="$(take_dir_for "$seq" "$d")"
+    n_aux="$(ls "$d"/masks/cam*-4k_masks_k0.h5 2>/dev/null | wc -l)"
+    n_want="$(aux_expected "$tdir")"
+    if [ "$n_aux" -eq 0 ]; then aux_col="  -  "
+    elif [ "$n_want" -gt 0 ]; then aux_col=" $n_aux/$n_want "
+    else aux_col="  $n_aux  "; fi
+
     printf '%-34s' "$seq"
-    for p in "$has_clip" "$has_aux" "$has_geom" "$has_mesh" "$has_metric" "$has_result"; do
+    mark "$has_clip"
+    printf '%-6s' "$aux_col"
+    for p in "$has_geom" "$has_mesh" "$has_metric" "$has_result"; do
         mark "$p"
     done
     echo
@@ -97,10 +172,11 @@ for d in "$WORK_ROOT"/*/; do
     seq="$(basename "$d")"
     [ -n "$FILTER" ] && [[ "$seq" != *"$FILTER"* ]] && continue
     [ -f "$d/clips.json" ] && continue
-    take="$(take_for "$seq")"
+    take="$(take_for "$seq" "$d")"
     # Relative, because every command here is meant to be run from the repo
     # root and the absolute form wraps across two lines.
     rel="${d#$(pwd)/}"
+    missing="$(aux_missing "$seq" "$(take_dir_for "$seq" "$d")" "$d")"
 
     echo
     echo "──────────────────────────────────────────────────────────────────"
@@ -122,6 +198,21 @@ for d in "$WORK_ROOT"/*/; do
         echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_masks.sh"
     elif [ ! -e "$d/geom/object_xyz.npz" ]; then
+        # Called out before step 4, because a missing camera is the usual
+        # reason step 4 reports poor coverage, and re-masking it fixes that
+        # outright instead of shortening the clip to fit.
+        if [ -n "$missing" ]; then
+            echo "  WARNING: no mask for $missing -- that camera's job failed, or"
+            echo "  it was never submitted. Fewer views means worse coverage in"
+            echo "  step 4, so fix this first:"
+            echo
+            echo "      sacct -u \$USER --starttime now-2days --format=JobID%14,JobName%40,State,ExitCode | grep $seq"
+            echo
+            echo "  If it failed, re-mask just that camera (the others are kept):"
+            echo
+            echo "      AUX_CAMS=\"$missing\" TAKE=$take SEQ=$seq bash scripts/recon_masks.sh"
+            echo
+        fi
         echo "  NEXT: step 4 -- can two cameras see the object?"
         echo
         echo "      python prep/check_view_coverage.py \\"
