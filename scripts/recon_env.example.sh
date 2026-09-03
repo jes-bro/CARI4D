@@ -56,9 +56,19 @@ export CHECKPOINT=/simurgh2/projects/ret-hoi/sapiens_ckpts/sapiens_host/pose/che
 # error" and kills whatever lands on it, which reads like a pipeline bug.
 # export EXCLUDE_NODES=
 
-# The #SBATCH --account, --partition and --mail-user lines are still literals
-# inside scripts/slurm_*.sh. On a different cluster those need editing there;
-# there is no environment override for them yet.
+# Account, partition and QOS. The slurm_*.sh files carry #SBATCH lines naming
+# this cluster's, but you do NOT need to edit them: sbatch reads these three
+# variables and they take precedence over the directives inside a job script.
+# Set them to your own and every stage follows.
+# export SBATCH_ACCOUNT=your_account
+# export SBATCH_PARTITION=your_partition
+# export SBATCH_QOS=normal
+
+# Job mail. This one has no Slurm environment variable, so the drivers pass it
+# on the sbatch command line. Left unset, the #SBATCH --mail-user literal in
+# each job script applies -- which means mail about YOUR jobs goes to the
+# address this repo was developed with, so set it.
+# export MAIL_USER=you@example.edu
 
 # --- NOT set here: things that must exist in the checkout --------------------
 # These are files and clones, not paths, so there is nothing to point at --

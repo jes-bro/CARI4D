@@ -91,6 +91,13 @@ DRY_RUN="${DRY_RUN:-}"
 #   EXCLUDE_NODES=simurgh6 TAKE=... SEQ=... bash scripts/recon_masks.sh
 EXCLUDE_NODES="${EXCLUDE_NODES:-}"
 
+# Who gets the job mail. The #SBATCH --mail-user line in each slurm_*.sh is a
+# literal address, and Slurm has no environment override for it the way it does
+# for --account and --partition, so it is passed on the command line instead.
+# Empty means "leave the script's own line alone", which is what keeps this a
+# no-op for the machine it was developed on.
+MAIL_USER="${MAIL_USER:-}"
+
 recon_require_env() {
     # Fail early and by name when TAKE or SEQ is missing.
     #
@@ -185,6 +192,11 @@ recon_sbatch() {
     # on the sbatch line takes effect).
     local excl=()
     [ -n "$EXCLUDE_NODES" ] && excl=(--exclude="$EXCLUDE_NODES")
+    # Same reasoning as --exclude: prepended, so an explicit caller flag wins.
+    # --account, --partition and --qos need nothing here -- Slurm reads
+    # SBATCH_ACCOUNT, SBATCH_PARTITION and SBATCH_QOS from the environment and
+    # they already override the #SBATCH lines in the job scripts.
+    [ -n "$MAIL_USER" ] && excl+=(--mail-user="$MAIL_USER")
 
     if [ -n "$DRY_RUN" ]; then
         echo "  would submit: sbatch ${excl[*]} $*" >&2

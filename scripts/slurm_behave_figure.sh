@@ -27,7 +27,10 @@
 
 set -euo pipefail
 
-CARI4D=/simurgh2/projects/ret-hoi/CARI4D
+# The checkout, taken from the directory sbatch ran in, as every other job
+# script here does. The literal that used to be on this line was the one path
+# a collaborator could not override without editing the file.
+CARI4D="${REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
 
 SEQ="${SEQ:-Date03_Sub01_bball_dribble}"
 
