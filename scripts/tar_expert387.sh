@@ -26,13 +26,24 @@
 # that EgoExo4D's best_exo field reports. The exo rig is fixed within a
 # capture, so one camera choice and one calibration cover all 18 takes.
 #
-#   bash scripts/tar_expert387.sh
+#   bash scripts/tar_expert387.sh                       # -> <repo>/expert387_takes.tar
 #   OUT=/scratch/handoff/expert387.tar bash scripts/tar_expert387.sh
+#
+# The archive lands in the checkout and is several GB. It is untracked and the
+# repo has no .gitignore, so it shows up in `git status` -- do not `git add -A`
+# while it is sitting there, and set OUT to scratch if the checkout is on a
+# quota.
 
 set -euo pipefail
 
+# Resolved from the script's own location, not the working directory: the tar
+# runs from inside TAKES_ROOT (that is what makes the archive paths relative),
+# so anything derived from `pwd` would land the archive in the middle of the
+# read-only mirror.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 TAKES_ROOT="${TAKES_ROOT:-/vision/group/egoexo4d/takes}"
-OUT="${OUT:-$HOME/expert387/expert387_takes.tar}"
+OUT="${OUT:-$REPO/expert387_takes.tar}"
 
 [ -d "$TAKES_ROOT" ] || { echo "ERROR: no takes root at $TAKES_ROOT" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
