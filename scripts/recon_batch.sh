@@ -80,10 +80,13 @@ while IFS=$'\t' read -r take seq participant drill duration pipe_cam; do
     # camera instead of resolving its own.
     PIPE_CAM="$PIPE_CAM_EXPLICIT"
     PIPE_CAM_SOURCE=""
-    if [ -z "$PIPE_CAM_EXPLICIT" ] && [ -n "$pipe_cam" ]; then
-        PIPE_CAM="$pipe_cam"
-        PIPE_CAM_SOURCE="manifest"
-    fi
+    # The manifest column is a FALLBACK now, below best_exo -- exported for
+    # recon_resolve_pipe_cam rather than assigned to PIPE_CAM. Every pipe_cam
+    # in every manifest was written by a tool that defaulted to cam04, not by
+    # anyone who looked at a mask video, so it cannot outrank the dataset's own
+    # per-take annotation. A camera someone actually verified goes in the
+    # environment (PIPE_CAM=camNN), which still wins over everything.
+    export PIPE_CAM_MANIFEST="$pipe_cam"
     recon_paths
     if [ -n "${SKIP_EXISTING:-}" ] && stage_done "$STAGE"; then
         echo "== skip $seq ($STAGE already done)"

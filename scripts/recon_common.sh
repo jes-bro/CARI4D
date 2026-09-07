@@ -49,7 +49,8 @@ export REPO TAKES_ROOT WORK_ROOT
 #
 # It is a strong prior, not ground truth -- best_exo says cam01 for
 # unc_basketball_03-31-23_02_9, whose verified reconstruction used cam04 -- so
-# an explicit value and the manifest both still win over it.
+# a camera someone actually typed still wins over it. The manifest does not:
+# see below.
 #
 # Captured before anything derives a default, so recon_paths() can tell an
 # explicit choice from one it computed. A batch iterates over takes whose
@@ -66,8 +67,13 @@ AUX_CAMS_EXPLICIT="${AUX_CAMS:-}"
 # fragile rather than as a setting being wrong.
 #
 # recon_paths() resolves it instead, so the order is: what the caller typed,
-# then the manifest's pipe_cam column, then the take's own best_exo, then
+# then the take's own best_exo, then the manifest's pipe_cam column, then
 # cam04 as a last resort. That works for every task without a manifest row.
+#
+# The manifest ranks BELOW best_exo deliberately. Every pipe_cam column ever
+# written holds a tool's cam04 default, not a value anyone checked against a
+# mask video, so letting it win made this resolution a no-op for exactly the
+# takes it exists for.
 PIPE_CAM="${PIPE_CAM:-}"
 
 # Every exo camera in an EgoExo4D capture. AUX_CAMS derives to all of them
@@ -156,13 +162,21 @@ recon_resolve_pipe_cam() {
     # likely to be wrong and least likely to complain: a take reconstructed
     # from the wrong main view runs to completion and just produces a worse
     # answer. A line in the log is what makes that checkable afterwards.
-    [ -z "$PIPE_CAM" ] || { PIPE_CAM_SOURCE="${PIPE_CAM_SOURCE:-explicit or manifest}"; return 0; }
+    # Explicit wins: a camera someone typed is the only one anybody verified.
+    [ -z "$PIPE_CAM" ] || { PIPE_CAM_SOURCE="${PIPE_CAM_SOURCE:-explicit}"; return 0; }
     PIPE_CAM="$(recon_best_exo)"
-    if [ -n "$PIPE_CAM" ]; then
-        PIPE_CAM_SOURCE="best_exo"
-    else
+    PIPE_CAM_SOURCE="best_exo"
+    # Then the manifest, then cam04. The manifest ranks BELOW best_exo because
+    # every pipe_cam column in every manifest holds a tool's cam04 default
+    # rather than a checked value -- ranking it above best_exo made this whole
+    # resolution a no-op for exactly the takes it was written for.
+    if [ -z "$PIPE_CAM" ] && [ -n "${PIPE_CAM_MANIFEST:-}" ]; then
+        PIPE_CAM="$PIPE_CAM_MANIFEST"
+        PIPE_CAM_SOURCE="manifest (no usable best_exo)"
+    fi
+    if [ -z "$PIPE_CAM" ]; then
         PIPE_CAM="cam04"
-        PIPE_CAM_SOURCE="fallback (no usable best_exo for this take)"
+        PIPE_CAM_SOURCE="fallback (no best_exo, no manifest)"
     fi
     echo "[recon] pipeline cam=$PIPE_CAM  (source: $PIPE_CAM_SOURCE)" >&2
 }
