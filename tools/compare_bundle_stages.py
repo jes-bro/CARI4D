@@ -52,6 +52,47 @@ def as_numpy(x):
     return np.asarray(x)
 
 
+def sparkline(values):
+    """Render a 1-D sequence as a short unicode bar trace, flat if it is constant."""
+    lo, hi = float(np.min(values)), float(np.max(values))
+    if hi - lo < 1e-9:
+        return '─' * min(len(values), 60) + '  (flat)'
+    bars = '▁▂▃▄▅▆▇█'
+    step = max(1, len(values) // 60)
+    sampled = values[::step][:60]
+    idx = ((sampled - lo) / (hi - lo) * (len(bars) - 1)).round().astype(int)
+    return ''.join(bars[i] for i in idx)
+
+
+def beta_trace(betas, batch_size=192):
+    """Print how betas move ACROSS frames, and what the shape of that motion means.
+
+    A body that changes size as the video plays is per-frame betas drifting;
+    a body that is uniformly the wrong size is a constant beta error. Only the
+    first tells you to look at the temporal model. The shape separates causes:
+    a smooth ramp is the refiner drifting, a step is a boundary artefact, and
+    the optimizer samples frames in windows of `batch_size` so a step there is
+    worth calling out by name.
+    """
+    if betas.ndim != 2 or betas.shape[0] < 2:
+        return
+    drift = float(np.max(np.abs(betas - betas[0:1])))
+    if drift < 1e-6:
+        print('    betas per-frame            constant (no mid-sequence size change)')
+        return
+    jumps = np.max(np.abs(np.diff(betas, axis=0)), axis=1)
+    worst = int(np.argmax(jumps))
+    print(f'    betas[:,0] trace  {sparkline(betas[:, 0])}')
+    print(f'    largest frame-to-frame change  {float(jumps[worst]):.4g} at frame {worst}->{worst + 1}')
+    if worst > 0 and worst % batch_size in (0, batch_size - 1):
+        print(f'      ^ that lands on a multiple of batch_size={batch_size}, which is where')
+        print('        the optimizer\'s sampling window changes -- suspect a chunk boundary')
+    ramp = abs(float(betas[-1, 0] - betas[0, 0]))
+    if ramp > 0.5 * drift:
+        print('      the drift is mostly a one-way ramp, not noise -- the temporal')
+        print('      refiner is walking the shape, not jittering it')
+
+
 def stage_summary(name, stage):
     """Print frame count, betas and translation statistics for one stage dict."""
     betas = as_numpy(stage['betas'])
@@ -60,7 +101,9 @@ def stage_summary(name, stage):
     drift = float(np.max(np.abs(betas - betas[0:1]))) if betas.ndim == 2 else 0.0
     print(f'  {name:<10} {n:4d} frames')
     print(f'    betas[0]   {np.array2string(betas[0], precision=3, suppress_small=True)}')
-    print(f'    betas drift across frames  {drift:.4g}')
+    print(f'    betas drift across frames  {drift:.4g}'
+          + ('   <-- body changes size mid-sequence' if drift > 1e-3 else ''))
+    beta_trace(betas)
     print(f'    smpl_t mean  x={smpl_t[:, 0].mean():+.3f}  '
           f'y={smpl_t[:, 1].mean():+.3f}  z={smpl_t[:, 2].mean():+.3f}')
     print(f'    smpl_t z     min={smpl_t[:, 2].min():.3f}  max={smpl_t[:, 2].max():.3f}')
