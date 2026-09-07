@@ -30,6 +30,8 @@ tell.
 """
 import argparse
 import os
+import pickle
+import types
 import sys
 
 import numpy as np
@@ -39,10 +41,53 @@ sys.path.append(os.getcwd())
 
 
 def load_bundle(path):
-    """Load a CARI4D .pth bundle, or exit with a message naming the path."""
+    """Load a CARI4D .pth bundle, stubbing heavy imports it does not need.
+
+    The bundle pickles a TrainState from learning.training.training_utils,
+    whose import chain reaches torchvision, smplx and friends. None of that is
+    needed to read betas and translations, and requiring it would mean this
+    diagnostic only runs on a machine that can already run the pipeline --
+    exactly the machine whose output you are trying to inspect from elsewhere.
+    So a missing module is stubbed and the load retried, up to a small limit
+    so a genuine failure still surfaces rather than looping.
+    """
     if not os.path.isfile(path):
         raise SystemExit(f'no such bundle: {path}')
-    return torch.load(path, map_location='cpu', weights_only=False)
+    try:
+        return torch.load(path, map_location='cpu', weights_only=False)
+    except Exception:
+        pass    # fall through to the tolerant reader below
+
+    class _Placeholder:
+        """Stands in for a pickled class whose module will not import here."""
+
+        def __setstate__(self, state):
+            self.__dict__.update(state if isinstance(state, dict) else {})
+
+    class _TolerantUnpickler(pickle.Unpickler):
+        """Unpickler that substitutes a placeholder for unimportable classes.
+
+        Substituting per CLASS rather than faking whole modules in sys.modules:
+        a fake `omegaconf` breaks the real class definitions that inherit from
+        it, which is worse than the missing import it was meant to paper over.
+        """
+
+        def find_class(self, module, name):
+            try:
+                return super().find_class(module, name)
+            except Exception:
+                missing.add(f'{module}.{name}')
+                return type(name, (_Placeholder,), {})
+
+    missing = set()
+    shim = types.ModuleType('tolerant_pickle')
+    shim.Unpickler, shim.load, shim.loads = _TolerantUnpickler, pickle.load, pickle.loads
+    shim.UnpicklingError = pickle.UnpicklingError
+    data = torch.load(path, map_location='cpu', weights_only=False, pickle_module=shim)
+    if missing:
+        print(f'  (read with placeholders for {len(missing)} unimportable class(es): '
+              f'{", ".join(sorted(missing)[:3])}{" ..." if len(missing) > 3 else ""})')
+    return data
 
 
 def as_numpy(x):
