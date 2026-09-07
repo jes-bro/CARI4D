@@ -73,8 +73,16 @@ while IFS=$'\t' read -r take seq participant drill duration pipe_cam; do
     # The manifest's pipeline camera wins, since it is a per-capture property;
     # a PIPE_CAM the caller actually typed still overrides it. recon_paths then
     # re-derives the aux list from whichever won.
+    #
+    # Reset per row FIRST. recon_paths() now resolves an unset pipeline camera
+    # from the take's own best_exo and writes it back, so without this a row
+    # whose manifest column is empty would silently inherit the previous row's
+    # camera instead of resolving its own.
+    PIPE_CAM="$PIPE_CAM_EXPLICIT"
+    PIPE_CAM_SOURCE=""
     if [ -z "$PIPE_CAM_EXPLICIT" ] && [ -n "$pipe_cam" ]; then
         PIPE_CAM="$pipe_cam"
+        PIPE_CAM_SOURCE="manifest"
     fi
     recon_paths
     if [ -n "${SKIP_EXISTING:-}" ] && stage_done "$STAGE"; then

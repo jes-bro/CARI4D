@@ -40,21 +40,35 @@ TAKES_ROOT="${TAKES_ROOT:-/vision/group/egoexo4d/takes}"
 WORK_ROOT="${WORK_ROOT:-$REPO/work}"
 export REPO TAKES_ROOT WORK_ROOT
 
-# The camera the pipeline reconstructs from. It is a property of the RIG
-# PLACEMENT, not of the task: the exo cameras are fixed within a capture session
-# and re-placed between them, so this belongs in the manifest per capture, not
-# here. The value below is only the fallback for a take run by hand.
+# The camera the pipeline reconstructs from. The CALIBRATION is a property of
+# the rig placement and so is per capture, but the best VIEW is not: the player
+# moves around the gym between takes, so which camera frames the action varies
+# take to take within one capture. That is what EgoExo4D's `best_exo` records,
+# and it is why the field disagreeing with itself inside a capture is the field
+# working rather than noise.
 #
-# EgoExo4D's own `best_exo` field is a starting hypothesis, not the answer --
-# it says cam01 for the UNC basketball capture, while the verified dribble
-# reconstruction was built from cam04. It is labelling a different question.
+# It is a strong prior, not ground truth -- best_exo says cam01 for
+# unc_basketball_03-31-23_02_9, whose verified reconstruction used cam04 -- so
+# an explicit value and the manifest both still win over it.
+#
 # Captured before anything derives a default, so recon_paths() can tell an
 # explicit choice from one it computed. A batch iterates over takes whose
 # pipeline camera differs, so both have to be re-derived per sequence -- but a
 # value the caller actually typed must survive that.
 PIPE_CAM_EXPLICIT="${PIPE_CAM:-}"
 AUX_CAMS_EXPLICIT="${AUX_CAMS:-}"
-PIPE_CAM="${PIPE_CAM:-cam04}"
+# Left EMPTY on purpose. It used to default to cam04 here, which was the
+# verified answer for ONE capture (unc_basketball_03-31-23_02, where the
+# original dribble reconstruction came from) and silently wrong everywhere
+# else: across the 191 takes since selected for reconstruction, EgoExo4D's own
+# best_exo names cam04 for four of them. A literal here made every new capture
+# inherit a camera nobody had checked, which reads as the pipeline being
+# fragile rather than as a setting being wrong.
+#
+# recon_paths() resolves it instead, so the order is: what the caller typed,
+# then the manifest's pipe_cam column, then the take's own best_exo, then
+# cam04 as a last resort. That works for every task without a manifest row.
+PIPE_CAM="${PIPE_CAM:-}"
 
 # Every exo camera in an EgoExo4D capture. AUX_CAMS derives to all of them
 # except the pipeline camera: mask everything. Masking is the expensive,
@@ -108,6 +122,51 @@ recon_require_env() {
     : "${SEQ:?set SEQ to the sequence name, e.g. Date03_Sub01_bball_rev003}"
 }
 
+recon_best_exo() {
+    # Print the take's own best_exo camera, or nothing.
+    #
+    # best_exo is EgoExo4D's per-take "which exo view shows this best". It
+    # varies within a capture, which looks wrong for a fixed rig until you
+    # notice the PLAYER moves between takes -- so per-take variation is the
+    # field working, not noise. It is a strong prior, not ground truth: it says
+    # cam01 for the take whose verified reconstruction used cam04.
+    #
+    # Prints nothing when the take is unknown, best_exo is null, or the camera
+    # it names has no 448 video on disk -- each of which happens -- so the
+    # caller can fall through rather than build a path to a missing file.
+    [ -n "${TAKE:-}" ] || return 0
+    python3 -c "
+import os, sys
+sys.path.append(os.getcwd())
+try:
+    from tools.list_layup_takes import resolve_takes_json, load_takes
+    takes = load_takes(resolve_takes_json(None, sys.argv[2]))
+    cam = next(t.get('best_exo') for t in takes if t['take_name'] == sys.argv[1])
+    if cam and os.path.isfile(os.path.join(
+            sys.argv[2], sys.argv[1], 'frame_aligned_videos', 'downscaled', '448', cam + '.mp4')):
+        print(cam)
+except Exception:
+    pass" "$TAKE" "$TAKES_ROOT" 2>/dev/null
+}
+
+recon_resolve_pipe_cam() {
+    # Fill PIPE_CAM when nothing upstream set it, and say where it came from.
+    #
+    # Announced on stderr because the pipeline camera is the setting most
+    # likely to be wrong and least likely to complain: a take reconstructed
+    # from the wrong main view runs to completion and just produces a worse
+    # answer. A line in the log is what makes that checkable afterwards.
+    [ -z "$PIPE_CAM" ] || { PIPE_CAM_SOURCE="${PIPE_CAM_SOURCE:-explicit or manifest}"; return 0; }
+    PIPE_CAM="$(recon_best_exo)"
+    if [ -n "$PIPE_CAM" ]; then
+        PIPE_CAM_SOURCE="best_exo"
+    else
+        PIPE_CAM="cam04"
+        PIPE_CAM_SOURCE="fallback (no usable best_exo for this take)"
+    fi
+    echo "[recon] pipeline cam=$PIPE_CAM  (source: $PIPE_CAM_SOURCE)" >&2
+}
+
 recon_paths() {
     # Export the per-sequence paths every stage refers to.
     #
@@ -116,6 +175,10 @@ recon_paths() {
     # reading nothing and reconstructing from defaults.
     # Derived here rather than once at source time, because a batch changes
     # PIPE_CAM between rows and the aux list has to follow it.
+    #
+    # The pipeline camera is resolved FIRST, since the aux list is everything
+    # except it.
+    recon_resolve_pipe_cam
     if [ -n "$AUX_CAMS_EXPLICIT" ]; then
         AUX_CAMS="$AUX_CAMS_EXPLICIT"
     else
@@ -128,7 +191,7 @@ recon_paths() {
     # Exported, not just set: the drivers hand these to sbatch through the
     # environment rather than --export=ALL,K=V, so anything a job reads has to
     # be exported here or at the call site.
-    export TAKE SEQ PIPE_CAM AUX_CAMS MIN_FRAMES HUMAN_PROMPT OBJECT_PROMPT
+    export TAKE SEQ PIPE_CAM PIPE_CAM_SOURCE AUX_CAMS MIN_FRAMES HUMAN_PROMPT OBJECT_PROMPT
     export WORK="$WORK_ROOT/$SEQ"
     export TAKE_DIR="$TAKES_ROOT/$TAKE"
     export FAV_DIR="$TAKE_DIR/frame_aligned_videos"
