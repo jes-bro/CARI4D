@@ -79,9 +79,10 @@ BAND_MIN = 0.3
 SYMMETRY_TOL = 1.5
 SYMMETRY_ROTATIONS = 24
 
-# Re-registration is only WORTH its cost when the object moves far enough
-# between frames to leave the tracker's convergence basin. Measured as motion
-# per frame in units of the object's own diameter.
+# How far an object must move between frames to leave the tracker's
+# convergence basin, in units of its own diameter. Only consulted for an
+# ASYMMETRIC object now -- see the REINIT_EVERY block for why a symmetric one
+# no longer has to clear it.
 MOTION_PER_DIAMETER = 0.25
 
 
@@ -278,18 +279,41 @@ def main():
                 if len(obj["xyz"]) > 1 else 0.0
             fast = diam > 0 and (step / diam) > MOTION_PER_DIAMETER
             symmetric = sym < SYMMETRY_TOL
-            if symmetric and fast:
+            # Symmetry alone decides it. The speed test used to gate this too,
+            # on the reasoning that re-registration is only WORTH its cost for
+            # an object that moves far enough to leave the tracker's basin.
+            # That weighed a cost against a benefit and ignored the risk: a
+            # clip that fails the test gets incremental tracking, whose error
+            # compounds frame over frame with nothing to correct it.
+            #
+            # Date07_Sub05_soccer_t004c is what that costs. A juggled soccer
+            # ball -- a sphere, aspect 1.006 -- moved 0.053 m per frame against
+            # a measured 0.220 m diameter: 0.240 diameters, against a 0.25
+            # threshold. Missing by 4% turned re-registration off, and the ball
+            # drifted smoothly from the player's feet out to 16.8 m over 200
+            # frames while the multi-view triangulation had it inside a 2 m box
+            # the whole time. The branch's own message read "moves little
+            # between frames; incremental tracking holds". It did not hold.
+            #
+            # For a symmetric object re-registration has no downside to weigh:
+            # the one hazard is picking a different arbitrary orientation each
+            # frame, and `symmetric` is exactly the finding that there is no
+            # orientation to pick. So speed is irrelevant -- a slow symmetric
+            # object still drifts, it just takes longer to notice.
+            if symmetric:
                 emit("REINIT_EVERY", "1",
-                     f"symmetry {sym:.3f} < {SYMMETRY_TOL} (orientation unobservable) "
-                     f"and {step:.3f}m/frame over a {diam:.3f}m object")
+                     f"symmetry {sym:.3f} < {SYMMETRY_TOL} (orientation unobservable), "
+                     f"so re-registering costs nothing and cannot drift"
+                     + ("" if fast else
+                        f" -- including at {step / diam:.3f} diameters/frame, "
+                        f"below the {MOTION_PER_DIAMETER} that used to be required"))
             else:
                 emit("REINIT_EVERY", "",
                      f"symmetry {sym:.3f}, motion {step:.3f}m/frame over a "
-                     f"{diam:.3f}m object -- "
-                     + ("not symmetric: re-registering would pick a different "
-                        "orientation each frame" if not symmetric
-                        else "moves little between frames; incremental tracking holds"))
-                if fast and not symmetric:
+                     f"{diam:.3f}m object -- not symmetric: re-registering "
+                     f"would pick a different orientation each frame")
+                # `not symmetric` is now implied by reaching this branch at all.
+                if fast:
                     print("  WARNING: this object moves fast AND has an observable "
                           "orientation. Neither setting is good -- incremental "
                           "tracking may lose it, re-registration may spin it. "
