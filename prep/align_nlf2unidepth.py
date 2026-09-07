@@ -23,7 +23,7 @@ import joblib
 import h5py
 import torch
 from behave_data.behave_video import BaseBehaveVideoData, load_masks
-from lib_smpl import get_smpl, SMPL_MODEL_ROOT
+from lib_smpl import get_smpl, SMPL_MODEL_ROOT, NUM_BETAS
 from tools import icp_utils
 import open3d as o3d 
 from smplfitter.pt import BodyModel, BodyFitter
@@ -91,7 +91,10 @@ class NLF2Unidepth(BaseBehaveVideoData):
         self.times = times_cut
         assert len(nlf_verts_all) == len(self.times), f'inconsistent number of frames {len(nlf_verts_all)}!={len(self.times)} on {self.video_prefix}!'
 
-        fitter = BodyFitter(BodyModel('smplh', nlf_gender, model_root=SMPL_MODEL_ROOT).to('cuda')).to(device)
+        # num_betas pinned, same reason as run_nlf_sepK.py: this fitter re-solves
+        # shape and would otherwise widen betas back to the file's 16.
+        fitter = BodyFitter(BodyModel('smplh', nlf_gender, model_root=SMPL_MODEL_ROOT,
+                                      num_betas=NUM_BETAS).to('cuda')).to(device)
         param_names = ['poses', 'betas', 'transls', 'center_pts', 'center_verts']
         params_all = {name: [] for name in param_names}
 

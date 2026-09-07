@@ -9,6 +9,14 @@
 #   Sub01=387 unc male, Sub02=388 unc male, Sub06=322 uniandes female,
 #   Sub03=563 sfu -- EgoExo4D records no demographics for sfu participants,
 #   so Sub03 (male) is a placeholder to confirm from the stage-1 mask video.
+#   Sub04=382 unc 03-30-23, Sub05=196 iiith soccer -- both male placeholders for
+#   the same reason: confirm from the stage-1 mask video, and move the take to a
+#   Sub06-08 slot if that is wrong, before stage 1 writes the sequence directory.
+# The iiith soccer capture's exo cameras are cam01 cam03 cam04 cam05 -- no cam02.
+# The scripts read each take's camera list off disk, so nothing needs typing in;
+# the cam04 below is the dashboard's default, NOT a verified best_exo. Scrub the
+# stage-1 overlay before trusting it: cam03 frames the same drill from the other
+# side. The drill column is 't' wherever nobody has labelled the drill yet.
 uniandes_basketball_001_16	Date04_Sub06_bball_mik016	322	mik	51.5	cam03
 uniandes_basketball_001_17	Date04_Sub06_bball_rev017	322	rev	100.1	cam03
 uniandes_basketball_001_19	Date04_Sub06_bball_mik019	322	mik	39.6	cam03
@@ -42,3 +50,24 @@ sfu_basketball017_16	Date05_Sub03_bball_mik016	563	mik	52.9	cam03
 sfu_basketball017_17	Date05_Sub03_bball_rev017	563	rev	76.8	cam03
 sfu_basketball017_20	Date05_Sub03_bball_mik020	563	mik	25.6	cam03
 sfu_basketball017_22	Date05_Sub03_bball_rev022	563	rev	51.7	cam03
+iiith_soccer_002_2	Date07_Sub05_soccer_t002	196	t	259.4	cam04
+iiith_soccer_002_4	Date07_Sub05_soccer_t004	196	t	176.1	cam04
+iiith_soccer_002_6	Date07_Sub05_soccer_t006	196	t	45.8	cam04
+unc_basketball_03-30-23_02_2	Date06_Sub04_bball_t002	382	t	36.5	cam04
+unc_basketball_03-30-23_02_3	Date06_Sub04_bball_t003	382	t	35.1	cam04
+unc_basketball_03-30-23_02_4	Date06_Sub04_bball_t004	382	t	57.4	cam04
+unc_basketball_03-30-23_02_5	Date06_Sub04_bball_t005	382	t	27.8	cam04
+unc_basketball_03-30-23_02_6	Date06_Sub04_bball_t006	382	t	36.7	cam04
+unc_basketball_03-30-23_02_7	Date06_Sub04_bball_t007	382	t	71.9	cam04
+unc_basketball_03-30-23_02_8	Date06_Sub04_bball_t008	382	t	29.0	cam04
+unc_basketball_03-30-23_02_9	Date06_Sub04_bball_t009	382	t	72.7	cam04
+unc_basketball_03-30-23_02_10	Date06_Sub04_bball_t010	382	t	58.5	cam04
+unc_basketball_03-30-23_02_11	Date06_Sub04_bball_t011	382	t	30.6	cam04
+unc_basketball_03-30-23_02_12	Date06_Sub04_bball_t012	382	t	64.4	cam04
+unc_basketball_03-30-23_02_13	Date06_Sub04_bball_t013	382	t	57.1	cam04
+unc_basketball_03-30-23_02_14	Date06_Sub04_bball_t014	382	t	28.8	cam04
+unc_basketball_03-30-23_02_15	Date06_Sub04_bball_t015	382	t	66.4	cam04
+unc_basketball_03-30-23_02_16	Date06_Sub04_bball_t016	382	t	58.6	cam04
+unc_basketball_03-30-23_02_17	Date06_Sub04_bball_t017	382	t	26.4	cam04
+unc_basketball_03-30-23_02_18	Date06_Sub04_bball_t018	382	t	64.7	cam04
+unc_basketball_03-30-23_02_19	Date06_Sub04_bball_t019	382	t	60.9	cam04

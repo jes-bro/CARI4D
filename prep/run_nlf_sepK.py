@@ -22,7 +22,7 @@ import os.path as osp
 import joblib
 from behave_data.behave_video import BaseBehaveVideoData
 from tools import img_utils
-from lib_smpl import get_smpl, SMPL_MODEL_ROOT
+from lib_smpl import get_smpl, SMPL_MODEL_ROOT, NUM_BETAS
 from behave_data.const import _sub_gender, EXCLUDE_OBJECTS
 from behave_data.utils import get_intrinsics_unified
 
@@ -39,7 +39,12 @@ class ViewSpecificNLFRunner(BaseBehaveVideoData):
         model = torch.jit.load(NLF_MODEL_PATH).cuda().eval() if model is None else model # works better for torch>=2.4
         device = 'cuda'
         gender = _sub_gender[self.video_prefix.split('_')[1]]
-        fitter_smplh = BodyFitter(BodyModel('smplh', gender, model_root=SMPL_MODEL_ROOT).to('cuda')).to(device)
+        # num_betas pinned: BodyModel defaults to every shapedir in the file, and
+        # the MANO SMPL+H release carries 16, while run_horefine.py reshapes betas
+        # with (-1, 10) and lib_smpl.NUM_BETAS is 10. Left unset, stage 9 dies with
+        # "cannot reshape array of size <frames*16> into shape (10)".
+        fitter_smplh = BodyFitter(BodyModel('smplh', gender, model_root=SMPL_MODEL_ROOT,
+                                            num_betas=NUM_BETAS).to('cuda')).to(device)
         
         if args.wild_video:
             K_all = np.array([self.camera_K])

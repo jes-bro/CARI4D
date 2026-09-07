@@ -44,14 +44,32 @@ class PredVisualizer(FPBehaveVideoProcessor):
     def __init__(self, args):
         # lightweight init: only camera intrinsics and helpers
         self.args = args
-        self.scale_ratio = 4
         self.video = args.video
+        # The render is the input downsampled by this factor. 4 was chosen for
+        # BEHAVE's 2048x1536 frames (-> 512x384 panels). A rectified EgoExo4D
+        # clip is 796x448 already, and /4 gave 199x112 panels: a 608x112 video
+        # in which the ball is three pixels and the labels (fontScale 1.0,
+        # sized for 384-px panels) cover half the frame. Pick the factor from
+        # the actual width so ~500-800 px panels come out either way.
+        self.scale_ratio = self.pick_scale_ratio(args.video)
 
-        self.camera_K = self.init_camera_K() # to be consistent with dataset format 
-        self.scale_ratio = 4
+        self.camera_K = self.init_camera_K() # to be consistent with dataset format
         print(self.camera_K, 'scale ratio', self.scale_ratio)
         self.camera_K[:2] /= self.scale_ratio
         self.init_others()
+
+    @staticmethod
+    def pick_scale_ratio(video_path):
+        """Downsample factor that lands the panels near 500-800 px wide."""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+            cap.release()
+        except Exception:
+            w = 0
+        if w <= 0:
+            return 4
+        return max(1, int(round(w / 640)))
 
     @staticmethod
     def get_parser():

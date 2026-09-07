@@ -207,6 +207,7 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 viz_file = f"{output_path.replace('.pkl', f'_k{k}.mp4')}"
                 vw = imageio.get_writer(viz_file, 'ffmpeg', fps=2)
             is_first_frame = True
+            deferred = []   # frames whose first registration found no depth; back-filled once one succeeds
             for i, t in enumerate(loop):
                 color, depth = self.load_color_depth(enum_idx, kids, t)
                 frame_time = self.get_time_str(t)
@@ -275,13 +276,35 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                         depth_reg = depth_scene.copy()
                         depth_reg[~keep] = 0
                     report_depth_coverage(depth_reg, mask_o, frame_time, zfar)
-                    pose = est.register(K=K_all[k], rgb=color, depth=depth_reg, ob_mask=mask_o.astype(bool),
-                                        iteration=5,
-                                        vis_score_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_score.png'),
-                                        vis_refine_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_refine.png'),
-                                        rgb_only=False, both_depth_and_rgb=False
-                                        )
-                    is_first_frame = False
+                    try:
+                        pose = est.register(K=K_all[k], rgb=color, depth=depth_reg, ob_mask=mask_o.astype(bool),
+                                            iteration=5,
+                                            vis_score_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_score.png'),
+                                            vis_refine_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_refine.png'),
+                                            rgb_only=False, both_depth_and_rgb=False
+                                            )
+                    except TypeError:
+                        # register() found fewer than 4 depth pixels inside the mask
+                        # after its erosion ('valid is empty'), fell back to the
+                        # previous pose, and on the first frame there is none:
+                        # "'NoneType' object is not subscriptable". That is one bad
+                        # mask, not a bad clip -- clip c's frame 0 was a 59 px sliver
+                        # of a ball that is 137 px one frame later -- so defer the
+                        # first registration to the next frame and give the skipped
+                        # frame(s) that pose. On a re-init frame the fallback pose
+                        # exists and register() does not raise, so this is only the
+                        # first-frame case; anything else is still an error.
+                        if not is_first_frame:
+                            raise
+                        print(f'[fp] frame {frame_time}: object mask of {int(mask_o.sum())} px leaves no usable depth '
+                              f'after erosion -- deferring the first registration to the next frame')
+                        deferred.append(frame_time)
+                        pose = None
+                    if pose is not None:
+                        if deferred:
+                            print(f'[fp] registered at frame {frame_time}; back-filling {len(deferred)} deferred '
+                                  f'frame(s) {deferred} with this pose')
+                        is_first_frame = False
                 else:
                     # run tracking mode
                     pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5)
@@ -290,9 +313,13 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 if frame_time not in pose_dict:
                     pose_dict[frame_time] = []
                 pose_dict[frame_time].append(pose)
+                if pose is not None and deferred:
+                    for ft in deferred:
+                        pose_dict[ft] = [pose if p is None else p for p in pose_dict[ft]]
+                    deferred = []
 
                 # visualize the result
-                if args.viz_path is not None and i % 15 == 0:
+                if args.viz_path is not None and i % 15 == 0 and pose is not None:
                     center_pose = pose @ np.linalg.inv(to_origin)
                     vis = color.copy()
                     vis = Utils.draw_posed_3d_box(K_all[k], img=vis, ob_in_cam=center_pose, bbox=bbox)
@@ -308,6 +335,10 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                     comb = np.concatenate((comb, viz_mask), 1)
                     comb = cv2.resize(comb, (comb.shape[1] // 3, comb.shape[0] // 3))
                     vw.append_data(comb)
+            if deferred:
+                raise RuntimeError(f'view {k}: registration never found usable depth inside the object mask '
+                                   f'({len(deferred)} frame(s) deferred, none registered) -- the masks or the '
+                                   f'injected depth are wrong for this clip, not just its first frame')
 
         # pack results and save
         kids = [kid_to_run]

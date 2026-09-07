@@ -40,6 +40,17 @@ TAKES_ROOT="${TAKES_ROOT:-/vision/group/egoexo4d/takes}"
 WORK_ROOT="${WORK_ROOT:-$REPO/work}"
 export REPO TAKES_ROOT WORK_ROOT
 
+# Which submit backend. ikura has no Slurm, so the drivers fall back to
+# scripts/recon_local.sh, which reproduces submit-and-chain with background
+# processes. Force either way with RECON_BACKEND=slurm|local.
+if [ -z "${RECON_BACKEND:-}" ]; then
+    if command -v sbatch >/dev/null 2>&1; then RECON_BACKEND=slurm; else RECON_BACKEND=local; fi
+fi
+export RECON_BACKEND
+if [ "$RECON_BACKEND" = local ]; then
+    . "$(dirname "${BASH_SOURCE[0]}")/recon_local.sh"
+fi
+
 # The camera the pipeline reconstructs from. The CALIBRATION is a property of
 # the rig placement and so is per capture, but the best VIEW is not: the player
 # moves around the gym between takes, so which camera frames the action varies
@@ -82,6 +93,9 @@ PIPE_CAM="${PIPE_CAM:-}"
 # centroids that already exist -- and triangulate_object.py now does that per
 # frame by consensus, so an aux view that is only sometimes good contributes
 # on the frames where it is good instead of being excluded up front.
+# Captured before the default, so recon_paths() can tell a list the caller typed
+# from the one it derives per take.
+ALL_CAMS_EXPLICIT="${ALL_CAMS:-}"
 ALL_CAMS="${ALL_CAMS:-cam01 cam02 cam03 cam04}"
 
 # SAM3 prompts. These are the basketball ones; a different object needs both
@@ -190,8 +204,20 @@ recon_paths() {
     # Derived here rather than once at source time, because a batch changes
     # PIPE_CAM between rows and the aux list has to follow it.
     #
-    # The pipeline camera is resolved FIRST, since the aux list is everything
-    # except it.
+    # Three steps, and the order is load-bearing: WHICH cameras exist, then
+    # WHICH ONE is the pipeline camera, then the aux list, which is the first
+    # minus the second.
+    #
+    # The exo cameras of THIS take, read off disk. cam01..cam04 holds for the unc
+    # and uniandes captures but not everywhere: the iiith soccer takes are
+    # cam01 cam03 cam04 cam05, and a fixed list would have masked a cam02 that
+    # does not exist and ignored cam05 entirely. An ALL_CAMS the caller set wins,
+    # then the take's own files, then the old default for a take not on disk.
+    if [ -z "$ALL_CAMS_EXPLICIT" ]; then
+        _found=$(cd "$TAKES_ROOT/$TAKE/frame_aligned_videos" 2>/dev/null && \
+                 ls cam*.mp4 2>/dev/null | sed 's/\.mp4$//' | sort | tr '\n' ' ')
+        [ -n "$_found" ] && ALL_CAMS="${_found% }"
+    fi
     recon_resolve_pipe_cam
     if [ -n "$AUX_CAMS_EXPLICIT" ]; then
         AUX_CAMS="$AUX_CAMS_EXPLICIT"
@@ -201,6 +227,7 @@ recon_paths() {
             [ "$_c" = "$PIPE_CAM" ] || AUX_CAMS="${AUX_CAMS:+$AUX_CAMS }$_c"
         done
     fi
+    export ALL_CAMS
 
     # Exported, not just set: the drivers hand these to sbatch through the
     # environment rather than --export=ALL,K=V, so anything a job reads has to
@@ -289,6 +316,10 @@ recon_sbatch() {
             [ -n "${!v:-}" ] && echo "         $v=${!v}" >&2
         done
         echo "DRYRUN"
+        return
+    fi
+    if [ "$RECON_BACKEND" = local ]; then
+        recon_local_submit "${excl[@]}" "$@"
         return
     fi
     local out

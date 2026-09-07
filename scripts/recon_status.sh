@@ -148,7 +148,10 @@ for d in "$WORK_ROOT"/*/; do
     # A count, not a yes: "2/3" is the case worth seeing, and it used to print
     # as "yes" because one existing mask satisfied the check.
     tdir="$(take_dir_for "$seq" "$d")"
-    n_aux="$(ls "$d"/masks/cam*-4k_masks_k0.h5 2>/dev/null | wc -l)"
+    # find, not ls-of-a-glob: nullglob is on above, so with no aux masks the
+    # glob vanishes and a bare `ls` lists the CURRENT DIRECTORY -- the repo
+    # root, 28 entries -- and the column read "28/3" for a clip with none.
+    n_aux="$(find "$d/masks" -maxdepth 1 -name 'cam*-4k_masks_k0.h5' 2>/dev/null | wc -l)"
     n_want="$(aux_expected "$tdir")"
     if [ "$n_aux" -eq 0 ]; then aux_col="  -  "
     elif [ "$n_want" -gt 0 ]; then aux_col=" $n_aux/$n_want "

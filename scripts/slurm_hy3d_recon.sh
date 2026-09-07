@@ -82,7 +82,12 @@ mkdir -p "$HF_HOME" "$HY3DGEN_MODELS" "$TORCH_HOME" \
 # 16400341 showed the banner below but not one line from the script itself.
 export PYTHONUNBUFFERED=1
 
-source ~/.bashrc
+# Like every other job script: the conda profile, not ~/.bashrc. A
+# non-interactive bash returns from ~/.bashrc before conda is set up, so
+# `conda activate` then finds no shell function and the job runs in whatever
+# python the submitter had -- here the cari4d venv, where hy3dgen does not
+# exist ("ModuleNotFoundError: No module named 'hy3dgen'").
+source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${HY3D_ENV:-hy3d}"
 
 cd "$REPO"

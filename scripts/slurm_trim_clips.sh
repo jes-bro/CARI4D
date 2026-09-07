@@ -77,6 +77,19 @@ n_expect=$((END - START + 1))
 echo "[trim] repo=$REPO"
 echo "[trim] window ${START}-${END} (${n_expect} frames) from ${SRC_DIR}"
 
+# ffmpeg renamed -vsync to -fps_mode in 5.0. ikura's is 4.4.2 and rejects
+# -fps_mode outright ("Error splitting the argument list"), while newer builds
+# still accept -vsync as a deprecated alias -- so ask this build which one it
+# takes rather than pinning either and breaking the other machine. The probe is
+# a real one-frame encode, not a version-string comparison: the flag is what
+# matters, and distro builds lie about version numbers.
+FPS_MODE=(-vsync vfr)
+if ffmpeg -hide_banner -loglevel error -f lavfi -i nullsrc \
+        -frames:v 1 -fps_mode vfr -f null - >/dev/null 2>&1; then
+    FPS_MODE=(-fps_mode vfr)
+fi
+echo "[trim] frame-rate flag: ${FPS_MODE[*]}"
+
 rc=0
 for c in $CAMS; do
     src="$SRC_DIR/$c.mp4"
@@ -90,7 +103,7 @@ for c in $CAMS; do
     # chewing through the rest of the take.
     ffmpeg -hide_banner -loglevel error -y -i "$src" \
         -vf "select='between(n\,${START}\,${END})',setpts=N/FRAME_RATE/TB" \
-        -fps_mode vfr -frames:v "$n_expect" -crf 18 -an "$out"
+        "${FPS_MODE[@]}" -frames:v "$n_expect" -crf 18 -an "$out"
     n_got=$(ffprobe -v error -count_frames -select_streams v \
         -show_entries stream=nb_read_frames -of csv=p=0 "$out")
     if [ "$n_got" != "$n_expect" ]; then
