@@ -57,11 +57,31 @@ log() { echo "[recon-solve] $*" >&2; }
 # which is what a dry run on a machine with no mesh did, silently and with
 # exit 2.
 MESH_OBJ="$(ls "$MESH_DIR"/*/*_align.obj 2>/dev/null | head -1 || true)"
+# Captured BEFORE the eval below. derive_knobs.py emits every knob it can
+# compute, unconditionally, and `eval` of that output overwrites the
+# environment -- so a value the caller set was silently discarded and the
+# ${TSTART:-0} defaults further down only ever applied when derive_knobs did
+# not run at all. That made these knobs un-overridable in practice, which is
+# the opposite of what they are for: they exist to be set by hand when the
+# derived value fails (a 59 px mask at frame 0 that erosion empties -> TSTART).
+# Restored after the eval, so derived stays the default and typed still wins.
+#
+# ${!k+set} rather than -n: REINIT_EVERY="" is a meaningful value (never
+# re-register), and testing for non-empty would drop exactly that choice.
+_KNOB_OVERRIDES=""
+for _k in TSTART ZFAR DEPTH_HUMAN_BAND ERODE_DEPTH_THRES REINIT_EVERY DEPTH_MAD_K; do
+    [ -n "${!_k+set}" ] && _KNOB_OVERRIDES="$_KNOB_OVERRIDES $_k=$(printf '%q' "${!_k}")"
+done
 if [ -z "$DRY_RUN" ] && [ -f "$OBJECT_XYZ" ]; then
     eval "$(python prep/derive_knobs.py --object_xyz "$OBJECT_XYZ" \
         ${HUMAN_J3D:+--human_j3d "$HUMAN_J3D"} --calib "$CALIB" --cam "$PIPE_CAM" \
         --masks_root "$RECT_DIR" --seq "$SEQ" \
         ${MESH_OBJ:+--mesh "$MESH_OBJ"})"
+fi
+# What the caller typed wins over what was derived.
+if [ -n "$_KNOB_OVERRIDES" ]; then
+    eval "$_KNOB_OVERRIDES"
+    log "knob overrides from the environment:$_KNOB_OVERRIDES"
 fi
 TSTART="${TSTART:-0}"
 ZFAR="${ZFAR:-20}"
