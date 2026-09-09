@@ -11,7 +11,6 @@
 #   DEST=kk@ikura:/data/egoexo/handoff bash scripts/ship_experts.sh 387 388 383
 #   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh 387
 #   DEST=... bash scripts/ship_experts.sh --file splits/to-ship.txt
-#   DEST=... DELETE_AFTER=1 bash scripts/ship_experts.sh 387   # free disk as it goes
 #   DRY_RUN=1 DEST=... bash scripts/ship_experts.sh 387   # print the plan
 #
 # RESUMABLE IN TWO SENSES. rsync --partial --append-verify picks a killed
@@ -20,12 +19,17 @@
 # marker file exists is skipped, so re-running the same list after an
 # interruption continues where it stopped instead of redoing what landed.
 #
-# With DELETE_AFTER=1 the local archive is removed ONLY after the transfer
-# exits 0, and only that archive. A failed transfer always leaves the tar in
-# place so the next run resumes it rather than re-packing.
+# THIS SCRIPT DELETES NOTHING. It packs, it uploads, and it leaves every
+# archive where it made it. There is no flag to change that -- a tool that
+# removes files as a side effect of uploading them is a tool you have to
+# remember to disarm, and it was disarmed the wrong way round.
 #
-# WATCH YOUR DISK without it: 173 subjects is ~495 GB, and by default they all
-# stay. Ship in batches, or pass DELETE_AFTER=1 once you trust the uploads.
+# So watch your disk: 173 subjects is ~495 GB and all of it stays. Ship in
+# batches with --file, and remove the archives yourself once you have seen
+# them land:
+#
+#   rclone ls gdrive:cari4d-handoff/cpr/          # confirm they arrived
+#   rm expert95_takes.tar expert98_takes.tar      # then reclaim the space
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -42,14 +46,6 @@ command -v "$XFER" >/dev/null 2>&1 || { echo "ERROR: $XFER is not installed" >&2
 # somebody actually works through. Read from the script's own header rather
 # than a table here, so it cannot disagree with what was generated.
 GROUP="${GROUP:-1}"
-# NOTHING IS DELETED unless you ask. This used to default the other way --
-# pack, ship, remove -- which kept peak disk at one archive but meant the
-# script quietly destroyed something after every upload. A tool that deletes
-# by default is a tool you have to remember a flag to make safe, and that is
-# backwards. DELETE_AFTER=1 restores the old behaviour when disk is the
-# binding constraint, and even then only ever removes the archive it just
-# finished uploading.
-DELETE_AFTER="${DELETE_AFTER:-}"
 DRY_RUN="${DRY_RUN:-}"
 STATE="${STATE:-.shipped}"
 mkdir -p "$STATE"
@@ -112,11 +108,7 @@ for p in (os.environ.get('EGOEXO_TAKES_JSON'),
         else
             echo "   would: rsync -aP --partial --append-verify $tarball $DEST/$sub"
         fi
-        if [ -n "$DELETE_AFTER" ]; then
-            echo "   would: rm $tarball   (DELETE_AFTER=1)"
-        else
-            echo "   would KEEP $tarball  (pass DELETE_AFTER=1 to remove it)"
-        fi
+        echo "   $tarball is kept; this script never deletes"
         continue
     fi
 
@@ -154,12 +146,7 @@ for p in (os.environ.get('EGOEXO_TAKES_JSON'),
     if "${xfer_cmd[@]}"; then
         # Recorded before the delete, so an interrupted run never re-ships.
         echo "$(date -u '+%Y-%m-%d %H:%M UTC')  $entries entries" > "$marker"
-        if [ -n "$DELETE_AFTER" ]; then
-            rm -f "$tarball"
-            echo "   done (local archive deleted, DELETE_AFTER=1)"
-        else
-            echo "   done (local archive kept at $tarball)"
-        fi
+        echo "   done (archive kept at $tarball)"
         done_n=$((done_n + 1))
     else
         echo "   RSYNC FAILED (rc=$?). The tar is kept so the next run resumes it."
