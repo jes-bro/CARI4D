@@ -37,15 +37,21 @@ def load_takes(path):
     raise SystemExit('could not find takes.json; pass --takes_json')
 
 
-def takes_for(takes, pid, tasks=None):
+def takes_for(takes, pid, tasks=None, scenario=None):
     """Return this participant's non-dropped takes, sorted by index.
 
-    `tasks` filters by task_name when given, which is how a cooking
-    participant is restricted to the pan dishes rather than their salads.
+    `tasks` filters by task_name, which is how a cooking participant is
+    restricted to the pan dishes rather than their salads. `scenario` filters
+    by parent_task_name, and one of the two is effectively required: a
+    participant can appear in more than one scenario, and without a filter
+    this returns all of it. Participant 833 is a soccer expert who also
+    cooked, and an unfiltered call packed ten cooking takes -- salads
+    included -- into what was meant to be a soccer subject.
     """
     out = [t for t in takes
            if t.get('participant_uid') == pid and not t.get('is_dropped')
-           and (tasks is None or t['task_name'] in tasks)]
+           and (tasks is None or t['task_name'] in tasks)
+           and (scenario is None or t.get('parent_task_name') == scenario)]
     return sorted(out, key=lambda t: t['take_idx'])
 
 
@@ -172,14 +178,17 @@ def main():
     ap.add_argument('--task', default='video')
     ap.add_argument('--note', default='')
     ap.add_argument('--tasks', default=None,
-                    help='comma-separated task_name filter, for cooking dishes')
+                    help='|-separated task_name filter, for cooking dishes')
+    ap.add_argument('--scenario', default=None,
+                    help='parent_task_name filter; give this or --tasks, since a '
+                         'participant can appear in more than one scenario')
     ap.add_argument('--takes_json', default=None)
     ap.add_argument('--force', action='store_true')
     args = ap.parse_args()
 
     takes = load_takes(args.takes_json)
     tasks = set(args.tasks.split('|')) if args.tasks else None
-    mine = takes_for(takes, args.pid, tasks)
+    mine = takes_for(takes, args.pid, tasks, args.scenario)
     if not mine:
         raise SystemExit(f'no takes for participant {args.pid}')
     bad = [t['take_name'] for t in mine if not cams_of(t)]
