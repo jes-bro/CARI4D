@@ -1,0 +1,4 @@
+.shipped/
+expert*_takes.tar
+tar*.log
+__pycache__/
