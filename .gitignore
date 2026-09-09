@@ -2,3 +2,5 @@
 expert*_takes.tar
 tar*.log
 __pycache__/
+# handoff/ is the manifest and README, text only -- the archives
+# themselves are matched by expert*_takes.tar above.
