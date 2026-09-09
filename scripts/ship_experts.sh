@@ -9,6 +9,7 @@
 # subjects you ship.
 #
 #   DEST=kk@ikura:/data/egoexo/handoff bash scripts/ship_experts.sh 387 388 383
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh 387
 #   DEST=... bash scripts/ship_experts.sh --file splits/to-ship.txt
 #   DEST=... KEEP=1 bash scripts/ship_experts.sh 387      # keep the local tar
 #   DRY_RUN=1 DEST=... bash scripts/ship_experts.sh 387   # print the plan
@@ -25,7 +26,18 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-DEST="${DEST:?set DEST to an rsync target, e.g. user@host:/path/to/handoff}"
+DEST="${DEST:?set DEST to an rsync target (user@host:/path) or an rclone remote (gdrive:folder)}"
+# rsync for a machine you can reach, rclone for object storage -- Google Drive
+# most likely, where the web UI and Drive for Desktop both give up on a 19 GB
+# file and rclone does chunked, resumable, verified uploads instead.
+XFER="${XFER:-rsync}"
+case "$XFER" in rsync|rclone) ;; *) echo "ERROR: XFER must be rsync or rclone" >&2; exit 1 ;; esac
+command -v "$XFER" >/dev/null 2>&1 || { echo "ERROR: $XFER is not installed" >&2; exit 1; }
+# Grouped by scenario, because the object changes with it and so do the SAM3
+# prompts and the FoundationPose knobs -- a folder per scenario is the unit
+# somebody actually works through. Read from the script's own header rather
+# than a table here, so it cannot disagree with what was generated.
+GROUP="${GROUP:-1}"
 KEEP="${KEEP:-}"
 DRY_RUN="${DRY_RUN:-}"
 STATE="${STATE:-.shipped}"
@@ -57,10 +69,38 @@ for pid in $IDS; do
         echo "== $pid  already shipped ($(cat "$marker"))"; done_n=$((done_n + 1)); continue
     fi
 
-    echo "== $pid"
+    # Scenario from takes.json via the first take the script names, not from
+    # the script's own prose: the hand-written ones say "video take" where the
+    # generated ones say "basketball take", and a folder called video/ helps
+    # nobody. Empty when it cannot be resolved, which just means no subfolder.
+    sub=""
+    if [ -n "$GROUP" ]; then
+        sub=$(python3 -c "
+import json, os, re, sys
+txt = open(sys.argv[1]).read()
+m = re.search(r'^    (\S+?)/', txt, re.M)
+if not m: raise SystemExit
+for p in (os.environ.get('EGOEXO_TAKES_JSON'),
+          os.path.join(os.path.dirname(os.environ.get('TAKES_ROOT','').rstrip('/')), 'takes.json'),
+          os.path.expanduser('~/egoexo4d/takes.json')):
+    if p and os.path.isfile(p):
+        for t in json.load(open(p)):
+            if t['take_name'] == m.group(1):
+                s = (t.get('parent_task_name') or '').lower().replace(' ', '-')
+                print({'health': 'cpr'}.get(s, s))
+                raise SystemExit
+" "$script" 2>/dev/null)
+        [ -n "$sub" ] && sub="${sub}/"
+    fi
+
+    echo "== $pid  ${sub:-(ungrouped)}"
     if [ -n "$DRY_RUN" ]; then
         echo "   would: bash $script"
-        echo "   would: rsync -aP --partial --append-verify $tarball $DEST/"
+        if [ "$XFER" = rclone ]; then
+            echo "   would: rclone copyto $tarball $DEST/${sub}$tarball"
+        else
+            echo "   would: rsync -aP --partial --append-verify $tarball $DEST/$sub"
+        fi
         echo "   would: rm $tarball  (unless KEEP=1)"
         continue
     fi
@@ -85,8 +125,18 @@ for pid in $IDS; do
     fi
     echo "   $entries entries, $(du -h "$tarball" | cut -f1)"
 
-    echo "   rsync..."
-    if rsync -aP --partial --append-verify "$tarball" "$DEST/"; then
+    echo "   uploading with $XFER..."
+    if [ "$XFER" = rclone ]; then
+        # --drive-chunk-size trades memory for throughput; 128M is the usual
+        # sweet spot. rclone verifies the upload itself, so a clean exit is
+        # the check -- there is no partial-file state to resume on Drive, but
+        # a re-run re-uploads only what is missing.
+        xfer_cmd=(rclone copyto --progress --drive-chunk-size 128M
+                  --retries 5 --low-level-retries 20 "$tarball" "$DEST/${sub}$tarball")
+    else
+        xfer_cmd=(rsync -aP --partial --append-verify --mkpath "$tarball" "$DEST/$sub")
+    fi
+    if "${xfer_cmd[@]}"; then
         # Recorded before the delete, so an interrupted run never re-ships.
         echo "$(date -u '+%Y-%m-%d %H:%M UTC')  $entries entries" > "$marker"
         [ -n "$KEEP" ] || rm -f "$tarball"
