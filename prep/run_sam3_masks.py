@@ -34,7 +34,21 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run SAM3 masks for CARI4D")
     parser.add_argument("--video", required=True, help="Path to input MP4 video")
     parser.add_argument("--human_prompt", required=True, help="Text prompt for human")
-    parser.add_argument("--object_prompt", required=True, help="Text prompt for object")
+    parser.add_argument("--object_prompt", default=None,
+                        help="Text prompt for object. Omit (or pass '') for a scene with no "
+                             "object -- partner dance -- and the object masks are written "
+                             "empty and the trim looks at the people only")
+    # --- two people: partner dance. The human pass tracks N instances, each
+    # held across chunks by overlap with its own previous mask; the first is
+    # written as this sequence's person, the second under --human2_seq. Which
+    # of the two is the participant is decided afterwards by
+    # prep/label_dancers.py from the Aria wearer's trajectory, not here.
+    parser.add_argument("--human_instances", type=int, default=1, choices=[1, 2],
+                        help="How many people to track (default 1). 2 for a partner dance")
+    parser.add_argument("--human2_seq", default=None,
+                        help="Sequence name for the second person's masks, written as "
+                             "<human2_seq>_masks_k<kid>.h5 beside the first (default "
+                             "<seq>_p2). Choose its Sub slot for the partner's gender")
     parser.add_argument("--kid", type=int, default=0, help="Camera/kinect id (default 0)")
     parser.add_argument("--output_dir", default=None,
                         help="Output directory for masks H5 (default: sibling masks/ folder)")
@@ -156,6 +170,65 @@ def merge_masks_from_output(out):
     return masks.any(axis=0)  # (H, W) bool
 
 
+def select_instances(out, ref_masks, person_mask=None):
+    """Assign one detected instance to each of len(ref_masks) tracking slots.
+
+    Slot i keeps its identity across chunk boundaries -- where SAM3's object
+    ids are not stable -- by overlap with ref_masks[i], the slot's last
+    non-empty mask. Assignment is greedy on the largest overlap over ALL
+    (slot, instance) pairs, so when two dancers are close the pair that
+    agrees best is settled first and cannot steal the other's instance.
+    Slots with no overlapping instance are filled from what is left: the
+    first such slot by proximity to person_mask when one is given (the
+    manipulated object is the one at the person's hands, not the largest
+    look-alike in the scene), then by area, largest first.
+
+    Returns two lists, masks and obj_ids, one entry per slot; an entry is
+    (None, None) when there were fewer instances than slots.
+    """
+    masks = out["out_binary_masks"]  # (N, H, W) bool
+    obj_ids = [int(i) for i in out["out_obj_ids"]]
+    n_slots = len(ref_masks)
+    picked = [None] * n_slots
+    if len(masks) == 0:
+        return [None] * n_slots, [None] * n_slots
+
+    free = set(range(len(masks)))
+    overlaps = np.zeros((n_slots, len(masks)), dtype=np.int64)
+    for s, ref in enumerate(ref_masks):
+        if ref is not None and ref.any():
+            overlaps[s] = [int(np.logical_and(m, ref).sum()) for m in masks]
+    while free and overlaps.max() > 0:
+        s, j = np.unravel_index(int(np.argmax(overlaps)), overlaps.shape)
+        picked[s] = j
+        free.discard(j)
+        overlaps[s, :] = 0
+        overlaps[:, j] = 0
+
+    near = None
+    if person_mask is not None and person_mask.any():
+        # Reach scales with the frame so 448p and 4K behave alike.
+        k = max(15, person_mask.shape[0] // 16)
+        near = cv2.dilate(person_mask.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    for s in range(n_slots):
+        if picked[s] is not None or not free:
+            continue
+        cands = sorted(free)
+        if near is not None:
+            score = [int(np.logical_and(masks[j], near).sum()) for j in cands]
+            if max(score) > 0:
+                picked[s] = cands[int(np.argmax(score))]
+                free.discard(picked[s])
+                near = None
+                continue
+        areas = [int(masks[j].sum()) for j in cands]
+        picked[s] = cands[int(np.argmax(areas))]
+        free.discard(picked[s])
+
+    return ([None if j is None else masks[j] for j in picked],
+            [None if j is None else obj_ids[j] for j in picked])
+
+
 def select_single_mask(out, ref_mask=None, person_mask=None):
     """Pick exactly one instance from a SAM3 detection output.
 
@@ -165,32 +238,10 @@ def select_single_mask(out, ref_mask=None, person_mask=None):
     the (dilated) person wins, because the manipulated object is the one at
     their hands, not the largest look-alike in the scene. Falls back to the
     largest instance. Returns (mask, obj_id), or (None, None) if nothing was
-    detected.
+    detected. The one-slot case of select_instances.
     """
-    masks = out["out_binary_masks"]  # (N, H, W) bool
-    obj_ids = [int(i) for i in out["out_obj_ids"]]
-    if len(masks) == 0:
-        return None, None
-
-    if ref_mask is not None and ref_mask.any():
-        overlaps = [int(np.logical_and(m, ref_mask).sum()) for m in masks]
-        best = int(np.argmax(overlaps))
-        if overlaps[best] > 0:
-            return masks[best], obj_ids[best]
-
-    if person_mask is not None and person_mask.any():
-        # Reach scales with the frame so 448p and 4K behave alike.
-        k = max(15, person_mask.shape[0] // 16)
-        near = cv2.dilate(person_mask.astype(np.uint8),
-                          np.ones((k, k), np.uint8)) > 0
-        overlaps = [int(np.logical_and(m, near).sum()) for m in masks]
-        best = int(np.argmax(overlaps))
-        if overlaps[best] > 0:
-            return masks[best], obj_ids[best]
-
-    areas = [int(m.sum()) for m in masks]
-    best = int(np.argmax(areas))
-    return masks[best], obj_ids[best]
+    masks, ids = select_instances(out, [ref_mask], person_mask)
+    return masks[0], ids[0]
 
 
 def clean_object_mask(mask, prev_mask, open_px):
@@ -246,7 +297,8 @@ def save_chunk_as_video(frames_chunk, tmpdir, chunk_idx, fps):
 
 
 def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
-                           single_instance=False, person_masks=None, open_px=0):
+                           single_instance=False, person_masks=None, open_px=0,
+                           n_instances=1):
     """Segment a text prompt across the video using chunked processing to avoid OOM.
 
     With single_instance=True, only one tracked instance is kept per frame instead
@@ -254,10 +306,16 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
     previous chunk's last mask, else by proximity to the person (when person_masks
     is given), else by size. open_px > 0 additionally runs clean_object_mask on
     every stored mask to cut thin attachments like a poured stream.
+
+    n_instances > 1 (implies single_instance) tracks that many people at once,
+    each slot held across chunks by overlap with its own last mask
+    (select_instances), and returns a LIST of per-slot {frame: mask} dicts.
+    With n_instances == 1 the return is the single dict it always was.
     """
     num_frames = len(frames)
-    all_masks = {}
-    prev_mask = None  # last non-empty mask, for continuity across chunks
+    n_slots = max(1, n_instances) if single_instance else 1
+    all_masks = [{} for _ in range(n_slots)]
+    prev_masks = [None] * n_slots  # last non-empty mask per slot, for continuity across chunks
 
     tmpdir = tempfile.mkdtemp(prefix="sam3_chunks_")
     try:
@@ -296,38 +354,41 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
                 print(f"      Warning: no objects detected for prompt '{text_prompt}' in chunk starting at frame {chunk_start}")
                 # Store None for all frames in this chunk
                 for i in range(chunk_len):
-                    all_masks[chunk_start + i] = None
+                    for s in range(n_slots):
+                        all_masks[s][chunk_start + i] = None
                 predictor.handle_request(request=dict(type="close_session", session_id=session_id))
                 torch.cuda.empty_cache()
                 continue
 
-            # Store frame 0 mask from detection
-            tracked_id = None
+            # Store frame 0 mask(s) from detection
+            tracked_ids = [None] * n_slots
             if single_instance:
                 seed_person = None if person_masks is None else person_masks.get(chunk_start)
-                mask, tracked_id = select_single_mask(det_out, ref_mask=prev_mask,
-                                                      person_mask=seed_person)
-                print(f"      Tracking instance {tracked_id} of {n_detected} detected")
+                masks0, tracked_ids = select_instances(det_out, prev_masks, person_mask=seed_person)
+                print(f"      Tracking instance(s) {tracked_ids} of {n_detected} detected")
             else:
-                mask = merge_masks_from_output(det_out)
-            mask = clean_object_mask(mask, prev_mask, open_px)
-            all_masks[chunk_start] = mask
-            if mask is not None and mask.any():
-                prev_mask = mask
+                masks0 = [merge_masks_from_output(det_out)]
+            for s in range(n_slots):
+                mask = clean_object_mask(masks0[s], prev_masks[s], open_px)
+                all_masks[s][chunk_start] = mask
+                if mask is not None and mask.any():
+                    prev_masks[s] = mask
 
             # Propagate through chunk
             for resp in predictor.handle_stream_request(
                 request=dict(type="propagate_in_video", session_id=session_id)
             ):
                 fi = resp["frame_index"]
-                if single_instance:
-                    mask = mask_for_obj_id(resp["outputs"], tracked_id)
-                else:
-                    mask = merge_masks_from_output(resp["outputs"])
-                mask = clean_object_mask(mask, prev_mask, open_px)
-                all_masks[chunk_start + fi] = mask
-                if mask is not None and mask.any():
-                    prev_mask = mask
+                for s in range(n_slots):
+                    if single_instance:
+                        mask = (None if tracked_ids[s] is None
+                                else mask_for_obj_id(resp["outputs"], tracked_ids[s]))
+                    else:
+                        mask = merge_masks_from_output(resp["outputs"])
+                    mask = clean_object_mask(mask, prev_masks[s], open_px)
+                    all_masks[s][chunk_start + fi] = mask
+                    if mask is not None and mask.any():
+                        prev_masks[s] = mask
 
             # Close session to free GPU memory
             predictor.handle_request(request=dict(type="close_session", session_id=session_id))
@@ -337,11 +398,12 @@ def segment_prompt_chunked(predictor, frames, text_prompt, chunk_size, fps,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     # Fill any missing frames with None
-    for i in range(num_frames):
-        if i not in all_masks:
-            all_masks[i] = None
+    for slot in all_masks:
+        for i in range(num_frames):
+            if i not in slot:
+                slot[i] = None
 
-    return all_masks
+    return all_masks[0] if n_slots == 1 else all_masks
 
 
 def save_masks_h5(human_masks, object_masks, output_path, seq_name, kid, frame_shape):
@@ -370,6 +432,7 @@ def save_masks_h5(human_masks, object_masks, output_path, seq_name, kid, frame_s
 
 
 PERSON_RGB = np.array([255, 0, 0])      # overlay colour for the human mask
+PERSON2_RGB = np.array([0, 200, 0])     # the second person, partner dance
 OBJECT_RGB = np.array([0, 0, 255])      # overlay colour for the object mask
 ALPHA = 0.5
 STRIP_H = 18                            # height of the tracked/lost timeline bar
@@ -427,7 +490,7 @@ def save_window_json(path, seq_name, source_video, runs, good, num_frames, fps,
 
 
 def emit_clips(frames, human_masks, object_masks, runs, good, seq_name, kid, fps,
-               emit_root, min_frames, max_clips, clips_json=None):
+               emit_root, min_frames, max_clips, clips_json=None, human2=None):
     """Write every usable run as its own self-contained clip directory.
 
     One take is several layup attempts, and SAM3 tracks them in separate
@@ -460,14 +523,18 @@ def emit_clips(frames, human_masks, object_masks, runs, good, seq_name, kid, fps
         masks_dir = os.path.join(clip_dir, "masks")
         n = hi - lo + 1
         print(f"   {clip_seq:<34} frames {lo}-{hi}  {n} frames  {n / fps:.1f}s")
+        h2 = None if human2 is None else (human2[0], f"{human2[1]}{chr(ord('a') + i)}")
         save_trimmed(frames, human_masks, object_masks, lo, hi, clip_seq, kid,
-                     masks_dir, fps=fps)
+                     masks_dir, fps=fps, human2=h2)
         save_window_json(os.path.join(clip_dir, "window.json"), clip_seq,
                          f"{seq_name} frames {lo}-{hi}", runs, good, len(frames),
                          fps, (lo, hi))
-        emitted.append({"seq": clip_seq, "dir": os.path.abspath(clip_dir),
-                        "lo": int(lo), "hi": int(hi), "n_frames": int(n),
-                        "covered_frac": float(good[lo:hi + 1].mean())})
+        rec = {"seq": clip_seq, "dir": os.path.abspath(clip_dir),
+               "lo": int(lo), "hi": int(hi), "n_frames": int(n),
+               "covered_frac": float(good[lo:hi + 1].mean())}
+        if h2 is not None:
+            rec["seq2"] = h2[1]
+        emitted.append(rec)
 
     if clips_json:
         os.makedirs(os.path.dirname(os.path.abspath(clips_json)), exist_ok=True)
@@ -562,22 +629,42 @@ def _hud(img, lines):
     return img
 
 
+def tracked_frames(human_masks, object_masks, num_frames, shape, min_person_px=1,
+                   min_object_px=1, human2_masks=None, has_object=True):
+    """Per-frame 'everything we track is present' flags, plus the areas.
+
+    The person, the object when there is one, and the second person when there
+    is one -- a partner-dance frame with only one dancer masked is as useless
+    as a basketball frame with no ball.
+    """
+    per, obj = mask_areas(human_masks, object_masks, num_frames, shape)
+    good = per >= min_person_px
+    if has_object:
+        good &= obj >= min_object_px
+    per2 = None
+    if human2_masks is not None:
+        per2, _ = mask_areas(human2_masks, {}, num_frames, shape)
+        good &= per2 >= min_person_px
+    return good, per, obj, per2
+
+
 def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
-                       zoom=False, zoom_size=140, min_person_px=1, min_object_px=1):
+                       zoom=False, zoom_size=140, min_person_px=1, min_object_px=1,
+                       human2_masks=None, has_object=True):
     """Side-by-side visualization: left=RGB, right=RGB+masks overlay.
 
-    Overlay colours are unchanged (human red, object blue, alpha 0.5). Added on
-    top: a per-frame HUD (frame index, both mask areas, TRACKED/LOST), a timeline
-    strip showing the whole sequence's tracked/lost pattern with a cursor, and an
-    optional magnified inset around the object.
+    Overlay colours are unchanged (human red, object blue, alpha 0.5; a second
+    person green). Added on top: a per-frame HUD (frame index, mask areas,
+    TRACKED/LOST), a timeline strip showing the whole sequence's tracked/lost
+    pattern with a cursor, and an optional magnified inset around the object.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     writer = imageio.get_writer(output_path, format='FFMPEG', fps=fps)
 
     shape = frames[0].shape[:2]
     n = len(frames)
-    per, obj = mask_areas(human_masks, object_masks, n, shape)
-    good = (per >= min_person_px) & (obj >= min_object_px)
+    good, per, obj, per2 = tracked_frames(human_masks, object_masks, n, shape, min_person_px,
+                                          min_object_px, human2_masks, has_object)
     out_w = frames[0].shape[1] * 2
 
     for idx, frame in enumerate(frames):
@@ -586,6 +673,10 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
         om = _mask_or_empty(object_masks, idx, shape)
         if hm.any():
             overlay[hm] = (overlay[hm] * (1 - ALPHA) + PERSON_RGB * ALPHA).astype(np.uint8)
+        if human2_masks is not None:
+            h2 = _mask_or_empty(human2_masks, idx, shape)
+            if h2.any():
+                overlay[h2] = (overlay[h2] * (1 - ALPHA) + PERSON2_RGB * ALPHA).astype(np.uint8)
         if om.any():
             overlay[om] = (overlay[om] * (1 - ALPHA) + OBJECT_RGB * ALPHA).astype(np.uint8)
 
@@ -597,9 +688,12 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
                 if ins is not None:
                     overlay[0:ins.shape[0], overlay.shape[1] - ins.shape[1]:] = ins
 
-        overlay = _hud(overlay, [f"f{idx}  {'TRACKED' if good[idx] else 'LOST'}",
-                                 f"person {int(per[idx])}px",
-                                 f"object {int(obj[idx])}px"])
+        lines = [f"f{idx}  {'TRACKED' if good[idx] else 'LOST'}", f"person {int(per[idx])}px"]
+        if per2 is not None:
+            lines.append(f"person2 {int(per2[idx])}px")
+        if has_object:
+            lines.append(f"object {int(obj[idx])}px")
+        overlay = _hud(overlay, lines)
         combined = np.concatenate([frame, overlay], axis=1)
         combined = np.concatenate(
             [combined, timeline_strip(good, out_w, STRIP_H, cursor=idx)], axis=0)
@@ -610,8 +704,12 @@ def save_visualization(frames, human_masks, object_masks, output_path, fps=30,
 
 
 def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
-                 out_dir, fps=30, video_subdir="trimmed_vids"):
+                 out_dir, fps=30, video_subdir="trimmed_vids", human2=None):
     """Write frames [lo, hi] as a normal sequence: a clip and its masks.
+
+    human2=(masks, seq2) additionally writes the second person's masks as
+    <seq2>_masks_k<kid>.h5 in the same out_dir, over the same frames, with the
+    same (possibly empty) object masks -- one clip, two sequences.
 
     Deliberately NOT a special artifact -- no suffix, no manifest. The trimmed
     masks ARE the masks (`<seq>_masks_k<kid>.h5` in out_dir, so masks_root is
@@ -647,6 +745,10 @@ def save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, kid,
     hm = {j: human_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
     om = {j: object_masks.get(i) for j, i in enumerate(range(lo, hi + 1))}
     save_masks_h5(hm, om, out_h5, seq_name, kid, frames[0].shape)
+    if human2 is not None:
+        h2m = {j: human2[0].get(i) for j, i in enumerate(range(lo, hi + 1))}
+        save_masks_h5(h2m, om, os.path.join(out_dir, f"{human2[1]}_masks_k{kid}.h5"),
+                      human2[1], kid, frames[0].shape)
 
     print(f"Saved clip  -> {out_video}  ({hi - lo + 1} frames, source frames {lo}-{hi})")
     print(f"Saved masks -> {out_h5}")
@@ -694,24 +796,37 @@ def main():
     gpus_to_use = list(range(torch.cuda.device_count()))
     predictor = build_sam3_video_predictor(gpus_to_use=gpus_to_use)
 
-    # Segment human (chunked) — always a single instance, CARI4D fits one body
-    print(f"Segmenting human: '{args.human_prompt}'...")
-    human_masks = segment_prompt_chunked(predictor, frames, args.human_prompt, args.chunk_size, fps,
-                                         single_instance=True)
+    # Segment human (chunked) -- one tracked instance, CARI4D fits one body; two
+    # for a partner dance, the second written under its own sequence name.
+    n_people = args.human_instances
+    seq2 = args.human2_seq or f"{seq_name}_p2"
+    print(f"Segmenting human: '{args.human_prompt}' ({n_people} instance(s))...")
+    hm = segment_prompt_chunked(predictor, frames, args.human_prompt, args.chunk_size, fps,
+                                single_instance=True, n_instances=n_people)
+    human_masks, human2_masks = (hm, None) if n_people == 1 else (hm[0], hm[1])
     human_count = sum(1 for m in human_masks.values() if m is not None and m.any())
     print(f"  Human masks found in {human_count}/{num_frames} frames")
+    if human2_masks is not None:
+        c2 = sum(1 for m in human2_masks.values() if m is not None and m.any())
+        print(f"  Second person ({seq2}) found in {c2}/{num_frames} frames")
 
     # Segment object (chunked). One instance near the person by default: the
-    # union of every look-alike in the scene is not a trajectory.
-    print(f"Segmenting object: '{args.object_prompt}' (select={args.object_select}, "
-          f"open={args.object_open}px)...")
-    object_masks = segment_prompt_chunked(
-        predictor, frames, args.object_prompt, args.chunk_size, fps,
-        single_instance=args.object_select != "union",
-        person_masks=human_masks if args.object_select == "near-person" else None,
-        open_px=args.object_open)
-    obj_count = sum(1 for m in object_masks.values() if m is not None and m.any())
-    print(f"  Object masks found in {obj_count}/{num_frames} frames")
+    # union of every look-alike in the scene is not a trajectory. No prompt
+    # means no object -- a dance -- and the object masks are written empty.
+    has_object = bool(args.object_prompt)
+    if has_object:
+        print(f"Segmenting object: '{args.object_prompt}' (select={args.object_select}, "
+              f"open={args.object_open}px)...")
+        object_masks = segment_prompt_chunked(
+            predictor, frames, args.object_prompt, args.chunk_size, fps,
+            single_instance=args.object_select != "union",
+            person_masks=human_masks if args.object_select == "near-person" else None,
+            open_px=args.object_open)
+        obj_count = sum(1 for m in object_masks.values() if m is not None and m.any())
+        print(f"  Object masks found in {obj_count}/{num_frames} frames")
+    else:
+        print("No object prompt: object masks will be empty, trim follows the people.")
+        object_masks = {i: None for i in range(num_frames)}
 
     # Shutdown predictor
     predictor.shutdown()
@@ -719,27 +834,33 @@ def main():
     # --- Tracking report. The per-mask counts above do not say whether the two
     # hold AT THE SAME TIME, which is what decides whether the take is usable. ---
     shape = frames[0].shape[:2]
-    per, obj = mask_areas(human_masks, object_masks, num_frames, shape)
-    good = (per >= args.trim_min_person_px) & (obj >= args.trim_min_object_px)
+    good, per, obj, per2 = tracked_frames(human_masks, object_masks, num_frames, shape,
+                                          args.trim_min_person_px, args.trim_min_object_px,
+                                          human2_masks, has_object)
     runs = sorted(find_tracked_runs(good, args.trim_gap_tolerance),
                   key=lambda r: -(r[1] - r[0] + 1))
-    print(f"\nBoth masks present in {int(good.sum())}/{num_frames} frames "
+    what = " and ".join(["the person"] + (["the second person"] if per2 is not None else [])
+                        + (["the object"] if has_object else []))
+    print(f"\nAll masks present in {int(good.sum())}/{num_frames} frames "
           f"({100.0 * good.mean():.1f}%)")
     print(f"Longest contiguous runs (gap_tolerance={args.trim_gap_tolerance}):")
     for r, (lo, hi) in enumerate(runs[:5], start=1):
         n = hi - lo + 1
         print(f"   #{r} frames {lo}-{hi}  {n} frames  {n / fps:.1f}s")
     if not runs:
-        print("   NONE -- the human and the object are never tracked together.")
+        print(f"   NONE -- {what} are never tracked together.")
 
     # Visualization of the WHOLE take -- it is the diagnostic for where tracking
     # holds, so trimming it first would hide exactly what you want to see.
     if args.visualize:
         vis_path = os.path.join(args.output_dir, f"{seq_name}_sam3_vis.mp4")
         save_visualization(frames, human_masks, object_masks, vis_path, fps=fps,
-                           zoom=args.zoom, zoom_size=args.zoom_size,
+                           zoom=args.zoom and has_object, zoom_size=args.zoom_size,
                            min_person_px=args.trim_min_person_px,
-                           min_object_px=args.trim_min_object_px)
+                           min_object_px=args.trim_min_object_px,
+                           human2_masks=human2_masks, has_object=has_object)
+
+    human2 = None if human2_masks is None else (human2_masks, seq2)
 
     # --- Masks are written ONCE, and by default they are the trimmed ones: the
     # full-length masks are not wanted, only the stretch that is actually usable.
@@ -747,7 +868,7 @@ def main():
     if args.emit_root:
         emit_clips(frames, human_masks, object_masks, runs, good, seq_name,
                    args.kid, fps, args.emit_root, args.emit_min_frames,
-                   args.emit_max_clips, args.clips_json)
+                   args.emit_max_clips, args.clips_json, human2=human2)
         if args.window_json:
             # The take-level window.json still records every run, which is what
             # makes the emitted set reviewable without opening each clip.
@@ -771,14 +892,13 @@ def main():
             save_window_json(args.window_json, seq_name, args.video, runs, good,
                              num_frames, fps, (lo, hi))
         save_trimmed(frames, human_masks, object_masks, lo, hi, seq_name, args.kid,
-                     args.output_dir, fps=fps)
+                     args.output_dir, fps=fps, human2=human2)
     else:
         # Either trimming is off, or nothing is usable. Save the full masks
         # regardless -- an expensive SAM3 run must never end with nothing on disk.
         if args.trim_to_tracked and not runs:
             print("\n" + "!" * 72, file=sys.stderr)
-            print("NOT TRIMMED: the human and the object are never tracked in the same "
-                  "frame.", file=sys.stderr)
+            print(f"NOT TRIMMED: {what} are never tracked in the same frame.", file=sys.stderr)
             print("Saving the FULL-length masks instead so the run is not wasted. Check "
                   "the", file=sys.stderr)
             print("visualization, then retry with different prompts or a larger "
@@ -792,6 +912,10 @@ def main():
                              num_frames, fps, None)
         save_masks_h5(human_masks, object_masks, h5_path, seq_name, args.kid,
                       frames[0].shape)
+        if human2 is not None:
+            save_masks_h5(human2[0], object_masks,
+                          os.path.join(args.output_dir, f"{human2[1]}_masks_k{args.kid}.h5"),
+                          human2[1], args.kid, frames[0].shape)
 
     print("Done!")
 
