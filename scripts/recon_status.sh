@@ -88,7 +88,7 @@ aux_expected() {
     # because not every capture has four.
     local tdir="$1" n
     [ -n "$tdir" ] || { echo 0; return; }
-    n="$(ls "$tdir"/frame_aligned_videos/cam*.mp4 2>/dev/null | wc -l)"
+    n="$(ls "$tdir"/frame_aligned_videos/cam*.mp4 "$tdir"/frame_aligned_videos/gp*.mp4 2>/dev/null | wc -l)"
     [ "$n" -gt 0 ] && echo $((n - 1)) || echo 0
 }
 
@@ -117,7 +117,8 @@ aux_missing() {
     local seq="$1" tdir="$2" d="$3" pipe c out=""
     [ -n "$tdir" ] || return
     pipe="$(pipe_cam_for "$seq" "$d")"
-    for f in "$tdir"/frame_aligned_videos/cam*.mp4; do
+    # Both prefixes: cam0N everywhere but upenn, gp0N there.
+    for f in "$tdir"/frame_aligned_videos/cam*.mp4 "$tdir"/frame_aligned_videos/gp*.mp4; do
         c="$(basename "$f" .mp4)"
         [ "$c" = "$pipe" ] && continue
         [ -e "$d/masks/${c}-4k_masks_k0.h5" ] || out="${out:+$out }$c"
@@ -151,7 +152,7 @@ for d in "$WORK_ROOT"/*/; do
     # find, not ls-of-a-glob: nullglob is on above, so with no aux masks the
     # glob vanishes and a bare `ls` lists the CURRENT DIRECTORY -- the repo
     # root, 28 entries -- and the column read "28/3" for a clip with none.
-    n_aux="$(find "$d/masks" -maxdepth 1 -name 'cam*-4k_masks_k0.h5' 2>/dev/null | wc -l)"
+    n_aux="$(find "$d/masks" -maxdepth 1 \( -name 'cam*-4k_masks_k0.h5' -o -name 'gp*-4k_masks_k0.h5' \) 2>/dev/null | wc -l)"
     n_want="$(aux_expected "$tdir")"
     if [ "$n_aux" -eq 0 ]; then aux_col="  -  "
     elif [ "$n_want" -gt 0 ]; then aux_col=" $n_aux/$n_want "
@@ -196,7 +197,7 @@ for d in "$WORK_ROOT"/*/; do
     if [ ! -e "$d/masks/${seq}_masks_k0.h5" ]; then
         echo "  incomplete -- this clip has no masks of its own."
         echo "  Re-run step 1 (recon_clips.sh) for its take."
-    elif [ ! -e "$(echo "$d"/masks/cam*-4k_masks_k0.h5 | cut -d' ' -f1)" ]; then
+    elif [ ! -e "$(echo "$d"/masks/cam*-4k_masks_k0.h5 "$d"/masks/gp*-4k_masks_k0.h5 | cut -d' ' -f1)" ]; then
         echo "  NEXT: step 3 -- mask the other cameras"
         echo
         echo "      TAKE=$take SEQ=$seq bash scripts/recon_masks.sh"

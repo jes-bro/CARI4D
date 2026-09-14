@@ -16,8 +16,15 @@
 # work directory already has the stage's main output, so a partly-failed batch
 # can be re-run without redoing what worked.
 #
-# Manifest format: tab-separated `take  seq  participant  drill  duration`,
-# `#` comments ignored. splits/layup-batch.tsv is the layup set.
+# Manifest format: tab-separated
+#   take  seq  participant  drill  duration  pipe_cam  human_prompt  object_prompt
+# `#` comments ignored; trailing columns may be omitted; a column that is
+# present but unset is written '-', never left blank (tab-splitting collapses
+# an empty field and shifts the rest left). splits/layup-batch.tsv
+# is the layup set. Columns 7-8 carry the SAM3 prompts per row, so one manifest
+# can mix objects; a HUMAN_PROMPT/OBJECT_PROMPT typed in the environment still
+# wins over them, the same rule as PIPE_CAM. A non-basketball row with neither
+# is refused by recon_common.sh before anything is submitted.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -64,12 +71,22 @@ stage_done() {
 }
 
 n=0
-while IFS=$'\t' read -r take seq participant drill duration pipe_cam; do
+while IFS=$'\t' read -r take seq participant drill duration pipe_cam human_prompt object_prompt; do
     case "$take" in ''|'#'*) continue ;; esac
     if [ -n "${ONLY:-}" ] && [ "$participant" != "$ONLY" ]; then
         continue
     fi
     export TAKE="$take" SEQ="$seq"
+    # '-' means unset. IFS=tab collapses consecutive tabs, so a genuinely empty
+    # column would shift every later one left; generated manifests write '-'.
+    [ "$pipe_cam" = "-" ] && pipe_cam=""
+    [ "$human_prompt" = "-" ] && human_prompt=""
+    [ "$object_prompt" = "-" ] && object_prompt=""
+    # Prompts: what the caller typed, else this row's columns, else the
+    # defaults -- reset per row so a row without columns cannot inherit the
+    # previous row's object.
+    HUMAN_PROMPT="${HUMAN_PROMPT_EXPLICIT:-${human_prompt:-$HUMAN_PROMPT_DEFAULT}}"
+    OBJECT_PROMPT="${OBJECT_PROMPT_EXPLICIT:-${object_prompt:-$OBJECT_PROMPT_DEFAULT}}"
     # The manifest's pipeline camera wins, since it is a per-capture property;
     # a PIPE_CAM the caller actually typed still overrides it. recon_paths then
     # re-derives the aux list from whichever won.

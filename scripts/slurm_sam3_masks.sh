@@ -108,6 +108,10 @@ python -u "$REPO/prep/run_sam3_masks.py" \
     ${EMIT_MIN_FRAMES:+--emit_min_frames "$EMIT_MIN_FRAMES"} \
     ${EMIT_MAX_CLIPS:+--emit_max_clips "$EMIT_MAX_CLIPS"} \
     ${TRIM_GAP:+--trim_gap_tolerance "$TRIM_GAP"} \
+    ${OBJECT_SELECT:+--object_select "$OBJECT_SELECT"} \
+    ${OBJECT_OPEN:+--object_open "$OBJECT_OPEN"} \
+    ${TRIM_MIN_OBJECT_PX:+--trim_min_object_px "$TRIM_MIN_OBJECT_PX"} \
+    ${TRIM_MIN_PERSON_PX:+--trim_min_person_px "$TRIM_MIN_PERSON_PX"} \
     --visualize
 
 echo "[sam3] done."

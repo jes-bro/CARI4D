@@ -100,9 +100,30 @@ ALL_CAMS="${ALL_CAMS:-cam01 cam02 cam03 cam04}"
 
 # SAM3 prompts. These are the basketball ones; a different object needs both
 # overridden, and the roadmap's 0/507-mask incident was exactly this default
-# being left in place for a kitchen sequence.
-HUMAN_PROMPT="${HUMAN_PROMPT:-one basketball player playing basketball}"
-OBJECT_PROMPT="${OBJECT_PROMPT:-ball}"
+# being left in place for a kitchen sequence. recon_paths() now refuses to run
+# a non-basketball take with them (see recon_check_prompts), and a batch
+# manifest can carry per-row prompts in columns 7-8 (see recon_batch.sh).
+# Captured before the default so a prompt the caller typed outranks a manifest
+# column, the same rule as PIPE_CAM.
+HUMAN_PROMPT_EXPLICIT="${HUMAN_PROMPT:-}"
+OBJECT_PROMPT_EXPLICIT="${OBJECT_PROMPT:-}"
+HUMAN_PROMPT_DEFAULT="one basketball player playing basketball"
+OBJECT_PROMPT_DEFAULT="ball"
+HUMAN_PROMPT="${HUMAN_PROMPT:-$HUMAN_PROMPT_DEFAULT}"
+OBJECT_PROMPT="${OBJECT_PROMPT:-$OBJECT_PROMPT_DEFAULT}"
+
+# SAM3 selection knobs, passed through to run_sam3_masks.py when set and left
+# to its defaults otherwise. They were unreachable from the drivers before, so
+# every cluster run used near-person selection with a 1 px trim threshold.
+#   OBJECT_SELECT       near-person | single | union
+#   OBJECT_OPEN         morphological opening radius for the object mask (0 = off)
+#   TRIM_MIN_OBJECT_PX  smallest object mask that counts as "present" for the trim
+#   TRIM_MIN_PERSON_PX  same for the person
+OBJECT_SELECT="${OBJECT_SELECT:-}"
+OBJECT_OPEN="${OBJECT_OPEN:-}"
+TRIM_MIN_OBJECT_PX="${TRIM_MIN_OBJECT_PX:-}"
+TRIM_MIN_PERSON_PX="${TRIM_MIN_PERSON_PX:-}"
+export OBJECT_SELECT OBJECT_OPEN TRIM_MIN_OBJECT_PX TRIM_MIN_PERSON_PX
 
 # Shortest window worth reconstructing, in frames. Enforced by the trim job so
 # a take whose masks never hold stops the chain before the 4K SAM3 runs, and by
@@ -169,6 +190,43 @@ except Exception:
     pass" "$TAKE" "$TAKES_ROOT" 2>/dev/null
 }
 
+recon_scenario() {
+    # Print the take's EgoExo4D parent_task_name (Basketball, Music, ...), or nothing.
+    [ -n "${TAKE:-}" ] || return 0
+    python3 -c "
+import os, sys
+sys.path.append(os.getcwd())
+try:
+    from tools.list_layup_takes import resolve_takes_json, load_takes
+    takes = load_takes(resolve_takes_json(None, sys.argv[2]))
+    print(next(t.get('parent_task_name') or '' for t in takes if t['take_name'] == sys.argv[1]))
+except Exception:
+    pass" "$TAKE" "$TAKES_ROOT" 2>/dev/null
+}
+
+recon_check_prompts() {
+    # Refuse to launch a non-basketball take with the basketball prompts.
+    #
+    # This is the failure that cost the kitchen pilot its first mask run: the
+    # defaults stayed in place, SAM3 looked for a ball in a kitchen, and the
+    # job finished cleanly with 0/507 masks. A take that is not basketball and
+    # still carries both defaults is never intended, so it stops here, before
+    # a GPU hour is spent. ALLOW_DEFAULT_PROMPTS=1 overrides, for a take whose
+    # scenario is unknown to takes.json.
+    [ -n "${ALLOW_DEFAULT_PROMPTS:-}" ] && return 0
+    [ "$HUMAN_PROMPT" = "$HUMAN_PROMPT_DEFAULT" ] || return 0
+    [ "$OBJECT_PROMPT" = "$OBJECT_PROMPT_DEFAULT" ] || return 0
+    local sc; sc="$(recon_scenario)"
+    case "$sc" in
+        ''|Basketball) return 0 ;;
+    esac
+    echo "ERROR: $TAKE is a '$sc' take but HUMAN_PROMPT/OBJECT_PROMPT are still the" >&2
+    echo "       basketball defaults. Set both (env, or manifest columns 7-8), e.g." >&2
+    echo "         HUMAN_PROMPT='person' OBJECT_PROMPT='acoustic guitar' ..." >&2
+    echo "       or ALLOW_DEFAULT_PROMPTS=1 if this really is what you want." >&2
+    exit 1
+}
+
 recon_resolve_pipe_cam() {
     # Fill PIPE_CAM when nothing upstream set it, and say where it came from.
     #
@@ -211,14 +269,20 @@ recon_paths() {
     # The exo cameras of THIS take, read off disk. cam01..cam04 holds for the unc
     # and uniandes captures but not everywhere: the iiith soccer takes are
     # cam01 cam03 cam04 cam05, and a fixed list would have masked a cam02 that
-    # does not exist and ignored cam05 entirely. An ALL_CAMS the caller set wins,
-    # then the take's own files, then the old default for a take not on disk.
+    # does not exist and ignored cam05 entirely. upenn (Music, Dance) names the
+    # same hero10 GoPros gp01..gp06, so both prefixes are read; an all-cam glob
+    # there matched nothing and silently fell back to four cameras that do not
+    # exist. An ALL_CAMS the caller set wins, then the take's own files, then
+    # the old default for a take not on disk.
     if [ -z "$ALL_CAMS_EXPLICIT" ]; then
+        # `|| true`: under set -e a take that is not on this machine (a dry run
+        # on a laptop) would otherwise abort the driver here, silently.
         _found=$(cd "$TAKES_ROOT/$TAKE/frame_aligned_videos" 2>/dev/null && \
-                 ls cam*.mp4 2>/dev/null | sed 's/\.mp4$//' | sort | tr '\n' ' ')
+                 ls cam*.mp4 gp*.mp4 2>/dev/null | sed 's/\.mp4$//' | sort | tr '\n' ' ') || true
         [ -n "$_found" ] && ALL_CAMS="${_found% }"
     fi
     recon_resolve_pipe_cam
+    recon_check_prompts
     if [ -n "$AUX_CAMS_EXPLICIT" ]; then
         AUX_CAMS="$AUX_CAMS_EXPLICIT"
     else
@@ -308,6 +372,7 @@ recon_sbatch() {
         # only the sbatch line would hide everything worth checking.
         for v in VIDEO OUT_DIR WINDOW_JSON EMIT_ROOT CLIPS_JSON \
                  EMIT_MIN_FRAMES EMIT_MAX_CLIPS TRIM_GAP NO_TRIM CHUNK HUMAN OBJECT \
+                 OBJECT_SELECT OBJECT_OPEN TRIM_MIN_OBJECT_PX TRIM_MIN_PERSON_PX \
                  SRC_DIR CAMS SUFFIX START END MIN_FRAMES \
                  MASKS_ROOT PACKED_ROOT HY3D_ROOT NLF_PATH FP_ROOT \
                  HY3D_MESHES_ROOT IDENTIFIER SAVE_NAME OPT_EXTRA \

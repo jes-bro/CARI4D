@@ -145,7 +145,7 @@ def aux_views(masks_root, kid):
     """Return the 4K aux mask-set names present, which are what get scored."""
     suffix = f"_masks_k{kid}.h5"
     return sorted(f[:-len(suffix)] for f in os.listdir(masks_root)
-                  if f.endswith(suffix) and f.startswith("cam") and "-4k" in f)
+                  if f.endswith(suffix) and f.startswith(("cam", "gp")) and "-4k" in f)
 
 
 def score_frames(video, masks_root, seq, kid, stride, min_px):
@@ -373,7 +373,7 @@ def main():
     views = args.views.split(",") if args.views else aux_views(masks_root, args.kid)
     if not views:
         raise SystemExit(
-            f"ERROR: no cam*-4k mask sets in {masks_root}. Stage 1b (recon_masks.sh) "
+            f"ERROR: no cam*-4k or gp*-4k mask sets in {masks_root}. Stage 1b (recon_masks.sh) "
             f"writes them, and the object is reconstructed from a 4K aux view "
             f"because it is ~8x larger there than in the pipeline camera.")
 
