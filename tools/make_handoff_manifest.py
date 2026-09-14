@@ -48,6 +48,22 @@ def gender_of(rec):
         return 'unrecorded'
 
 
+def folder_of(take):
+    """The Drive/handoff folder an archive lands in, from its first take.
+
+    Scenario lowercased, with two renames: 'health' is called cpr, and Music
+    splits by instrument (music/guitar, music/piano, music/violin) because the
+    partner works one instrument at a time. Must match the same rule inlined in
+    scripts/ship_experts.sh, which is what actually chooses the upload path.
+    """
+    s = (take.get('parent_task_name') or '').lower().replace(' ', '-')
+    s = {'health': 'cpr'}.get(s, s)
+    if s == 'music':
+        inst = take['task_name'].replace('Playing ', '').split(' - ')[0].lower()
+        s = f'music/{inst}'
+    return s
+
+
 def rows(takes_by_name, people, prof):
     """One manifest row per tar_expert script, sorted by scenario then subject."""
     out = []
@@ -56,14 +72,10 @@ def rows(takes_by_name, people, prof):
         names = scripted_takes(f)
         tk = [takes_by_name[n] for n in names]
         cams = sorted({c for t in tk for c in t.get('frame_aligned_videos', {})
-                       if c.startswith('cam')})
+                       if c.startswith(('cam', 'gp'))})
         tiers = sorted({prof[t['take_uid']] for t in tk if t['take_uid'] in prof})
         out.append({
-            # 'health' is EgoExo4D's name for the scenario; everyone here calls
-            # it CPR, and scripts/ship_experts.sh names the folder that too.
-            'scenario': {'health': 'cpr'}.get(
-                (tk[0].get('parent_task_name') or '').lower().replace(' ', '-'),
-                (tk[0].get('parent_task_name') or '').lower().replace(' ', '-')),
+            'scenario': folder_of(tk[0]),
             'participant': pid,
             'archive': f'expert{pid}_takes.tar',
             'takes': len(tk),

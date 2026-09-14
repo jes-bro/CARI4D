@@ -1,0 +1,12 @@
+# top 10 piano participants by proficiency, from tools/rank_experts.py. One pid per line; ship with
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-piano.txt
+478  # Late Expert x4, 4 takes, 26.9 min, upenn
+481  # Late Expert x4, 4 takes, 32.3 min, upenn
+490  # Late Expert x4, 4 takes, 29.5 min, upenn
+491  # Late Expert x4, 4 takes, 28.3 min, upenn
+492  # Late Expert x4, 4 takes, 27.4 min, upenn
+589  # Late Expert x4, 4 takes, 12.7 min, indiana
+871  # Late Expert x4, 4 takes, 6.7 min, iiith
+505  # Late Expert x3, 3 takes, 25.2 min, upenn
+597  # Late Expert x2, Intermediate Expert x1, unlabelled x1, 4 takes, 24.0 min, indiana
+352  # Intermediate Expert x4, 4 takes, 23.9 min, upenn

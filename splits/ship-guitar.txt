@@ -1,0 +1,12 @@
+# top 10 guitar participants by proficiency, from tools/rank_experts.py. One pid per line; ship with
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-guitar.txt
+400  # Late Expert x4, 4 takes, 29.0 min, upenn
+401  # Late Expert x4, 4 takes, 24.3 min, upenn
+405  # Late Expert x4, 4 takes, 28.5 min, upenn
+220  # Late Expert x1, Intermediate Expert x3, 4 takes, 29.4 min, upenn
+493  # Late Expert x3, 3 takes, 19.5 min, upenn
+506  # Intermediate Expert x4, 4 takes, 24.3 min, upenn
+596  # Intermediate Expert x2, Early Expert x2, 4 takes, 21.3 min, indiana
+870  # Early Expert x5, 5 takes, 9.8 min, iiith
+399  # Early Expert x4, 4 takes, 27.1 min, upenn
+184  # Late Expert x1, unlabelled x3, 4 takes, 20.5 min, upenn

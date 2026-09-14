@@ -3,9 +3,15 @@
 The tar scripts name every path literally so what gets packed is auditable by
 reading the file. That property is worth keeping and hand-typing is not: a
 participant with 18 takes is 108 paths, and the camera set differs per take
-(iiith_soccer_002 has no cam02, utokyo soccer has five cameras, upenn cooking
-uses gp01-gp06 and is not supported here at all). So the literal list is
+(iiith_soccer_002 has no cam02, utokyo soccer has five cameras, upenn names
+its exo GoPros gp01-gp06 instead of cam01-cam05). So the literal list is
 generated from takes.json and checked, rather than transcribed.
+
+The gp* rig is packed exactly like cam*: it is the same hero10 hardware under
+a different label, and every upenn Music and Dance take carries it. Note that
+scripts/recon_common.sh still derives its camera list from `ls cam*.mp4`, so
+a gp* take extracts fine but is not yet reconstructable without teaching that
+glob the second prefix.
 
     python tools/gen_tar_expert.py 380 --task "basketball" \
         --note "Late Expert, one of three in unc_basketball_03-30-23_01."
@@ -55,10 +61,17 @@ def takes_for(takes, pid, tasks=None, scenario=None):
     return sorted(out, key=lambda t: t['take_idx'])
 
 
+EXO_PREFIXES = ('cam', 'gp')
+
+
 def cams_of(take):
-    """Exo camera names this take actually has, from its frame_aligned_videos."""
+    """Exo camera names this take actually has, from its frame_aligned_videos.
+
+    Accepts both naming schemes: cam01-cam05 everywhere but upenn, gp01-gp06
+    there. Aria streams and the 'collage' / 'best_exo' entries are skipped.
+    """
     fav = take.get('frame_aligned_videos') or {}
-    return sorted(c for c in fav if c.startswith('cam'))
+    return sorted(c for c in fav if c.startswith(EXO_PREFIXES))
 
 
 def estimate_gb(takes):
@@ -108,13 +121,13 @@ def header(pid, takes, note, task, gb):
 # before committing a capture to a view.
 #
 # WHAT EACH TAKE CONTRIBUTES:
-#   frame_aligned_videos/cam0N.mp4         the 4K exo views
+#   frame_aligned_videos/cam0N.mp4         the 4K exo views (gp0N.mp4 at upenn)
 #   frame_aligned_videos/downscaled/448    the pipeline-resolution copies (dir)
 #   trajectory/gopro_calibs.csv            per-take fisheye calibration
 #
 # Verify availability on the mirror BEFORE running this:
 #
-#   python3 -c "import json,os; R='/vision/group/egoexo4d/takes'; T=json.load(open('/vision/group/egoexo4d/takes.json')); [print('%-34s cams=%d 448=%d calib=%s' % (t['take_name'], sum(os.path.isfile('%s/%s/frame_aligned_videos/%s.mp4'%(R,t['take_name'],c)) for c in sorted(k for k in (t.get('frame_aligned_videos') or {{}}) if k.startswith('cam'))), len(os.listdir('%s/%s/frame_aligned_videos/downscaled/448'%(R,t['take_name']))) if os.path.isdir('%s/%s/frame_aligned_videos/downscaled/448'%(R,t['take_name'])) else 0, os.path.isfile('%s/%s/trajectory/gopro_calibs.csv'%(R,t['take_name'])))) for t in sorted(T,key=lambda x:x['take_idx']) if t.get('participant_uid')=={pid}]"
+#   python3 -c "import json,os; R='/vision/group/egoexo4d/takes'; T=json.load(open('/vision/group/egoexo4d/takes.json')); [print('%-34s cams=%d 448=%d calib=%s' % (t['take_name'], sum(os.path.isfile('%s/%s/frame_aligned_videos/%s.mp4'%(R,t['take_name'],c)) for c in sorted(k for k in (t.get('frame_aligned_videos') or {{}}) if k.startswith(('cam','gp')))), len(os.listdir('%s/%s/frame_aligned_videos/downscaled/448'%(R,t['take_name']))) if os.path.isdir('%s/%s/frame_aligned_videos/downscaled/448'%(R,t['take_name'])) else 0, os.path.isfile('%s/%s/trajectory/gopro_calibs.csv'%(R,t['take_name'])))) for t in sorted(T,key=lambda x:x['take_idx']) if t.get('participant_uid')=={pid}]"
 #
 #   bash scripts/tar_expert{pid}.sh                    # -> <repo>/expert{pid}_takes.tar
 #   OUT=/scratch/expert{pid}.tar bash scripts/tar_expert{pid}.sh
@@ -193,7 +206,7 @@ def main():
         raise SystemExit(f'no takes for participant {args.pid}')
     bad = [t['take_name'] for t in mine if not cams_of(t)]
     if bad:
-        raise SystemExit(f'takes with no cam* videos (unsupported rig): {bad}')
+        raise SystemExit(f'takes with no cam*/gp* videos (unsupported rig): {bad}')
 
     gb = estimate_gb(mine)
     out = f'scripts/tar_expert{args.pid}.sh'

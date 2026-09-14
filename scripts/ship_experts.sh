@@ -43,8 +43,9 @@ case "$XFER" in rsync|rclone) ;; *) echo "ERROR: XFER must be rsync or rclone" >
 command -v "$XFER" >/dev/null 2>&1 || { echo "ERROR: $XFER is not installed" >&2; exit 1; }
 # Grouped by scenario, because the object changes with it and so do the SAM3
 # prompts and the FoundationPose knobs -- a folder per scenario is the unit
-# somebody actually works through. Read from the script's own header rather
-# than a table here, so it cannot disagree with what was generated.
+# somebody actually works through. Music goes one level deeper, by instrument
+# (music/guitar, music/piano), for the same reason. Read from the script's own
+# header rather than a table here, so it cannot disagree with what was generated.
 GROUP="${GROUP:-1}"
 DRY_RUN="${DRY_RUN:-}"
 STATE="${STATE:-.shipped}"
@@ -94,7 +95,12 @@ for p in (os.environ.get('EGOEXO_TAKES_JSON'),
         for t in json.load(open(p)):
             if t['take_name'] == m.group(1):
                 s = (t.get('parent_task_name') or '').lower().replace(' ', '-')
-                print({'health': 'cpr'}.get(s, s))
+                s = {'health': 'cpr'}.get(s, s)
+                # Music splits by instrument: 'Playing Guitar - Suzuki Books'
+                # -> music/guitar. Same rule as tools/make_handoff_manifest.py.
+                if s == 'music':
+                    s += '/' + t['task_name'].replace('Playing ', '').split(' - ')[0].lower()
+                print(s)
                 raise SystemExit
 " "$script" 2>/dev/null)
         [ -n "$sub" ] && sub="${sub}/"

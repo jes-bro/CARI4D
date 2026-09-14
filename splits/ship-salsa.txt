@@ -1,0 +1,12 @@
+# top 10 salsa participants by proficiency, from tools/rank_experts.py. One pid per line; ship with
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-salsa.txt
+34  # Late Expert x10, 10 takes, 10.5 min, uniandes
+240  # Late Expert x10, 10 takes, 11.1 min, uniandes
+248  # Late Expert x10, 10 takes, 10.4 min, uniandes
+249  # Late Expert x10, 10 takes, 10.7 min, uniandes
+239  # Intermediate Expert x10, 10 takes, 11.1 min, uniandes
+243  # Intermediate Expert x10, 10 takes, 11.2 min, uniandes
+244  # Intermediate Expert x10, 10 takes, 11.2 min, uniandes
+236  # Intermediate Expert x9, 9 takes, 9.6 min, uniandes
+40  # Late Expert x5, 5 takes, 4.7 min, uniandes
+251  # Late Expert x4, 4 takes, 2.7 min, uniandes
