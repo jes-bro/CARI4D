@@ -1,0 +1,15 @@
+# 10 cpr participants for the novice handoff, from
+#   tools/pick_novice_handoff.py cpr --tier unlabeled --emit-list
+# None is in the InterMimic training set (bball7 + soccer15 + cpr13).
+# Ship with:
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-novice-cpr.txt
+98  # unlabeled, 3 takes, 4.8 min, nus
+92  # unlabeled, 3 takes, 4.6 min, nus
+93  # unlabeled, 3 takes, 4.0 min, nus
+105  # unlabeled, 3 takes, 4.0 min, nus
+106  # unlabeled, 2 takes, 4.0 min, nus
+95  # unlabeled, 3 takes, 3.6 min, nus
+813  # unlabeled, 3 takes, 3.5 min, nus
+104  # unlabeled, 2 takes, 3.2 min, nus
+802  # unlabeled, 3 takes, 3.2 min, nus
+120  # unlabeled, 2 takes, 3.1 min, nus

@@ -1,0 +1,15 @@
+# 10 soccer participants for the novice handoff, from
+#   tools/pick_novice_handoff.py soccer --tier unlabeled --emit-list
+# None is in the InterMimic training set (bball7 + soccer15 + cpr13).
+# Ship with:
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-novice-soccer.txt
+909  # unlabeled, 21 takes, 25.9 min, unc
+908  # unlabeled, 22 takes, 25.2 min, unc
+162  # unlabeled, 3 takes, 21.5 min, cmu
+904  # unlabeled, 16 takes, 19.5 min, unc
+910  # unlabeled, 4 takes, 15.3 min, unc
+167  # unlabeled, 2 takes, 13.9 min, cmu
+906  # unlabeled, 8 takes, 13.4 min, unc
+152  # unlabeled, 3 takes, 13.1 min, cmu
+165  # unlabeled, 3 takes, 12.6 min, cmu
+898  # unlabeled, 3 takes, 12.3 min, nus

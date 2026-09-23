@@ -1,0 +1,15 @@
+# 10 basketball participants for the novice handoff, from
+#   tools/pick_novice_handoff.py basketball --tier Novice --emit-list
+# None is in the InterMimic training set (bball7 + soccer15 + cpr13).
+# Ship with:
+#   XFER=rclone DEST=gdrive:cari4d-handoff bash scripts/ship_experts.sh --file splits/ship-novice-basketball.txt
+560  # Novice, 9 takes, 10.1 min, sfu
+425  # Novice, 11 takes, 9.4 min, sfu
+558  # Novice, 10 takes, 8.8 min, sfu
+428  # Novice, 10 takes, 8.4 min, sfu
+424  # Novice, 10 takes, 7.7 min, sfu
+566  # Novice, 8 takes, 6.8 min, sfu
+418  # Novice, 8 takes, 5.9 min, sfu
+567  # Novice, 6 takes, 5.3 min, sfu
+421  # Novice, 6 takes, 5.1 min, sfu
+341  # Novice, 3 takes, 3.8 min, uniandes
