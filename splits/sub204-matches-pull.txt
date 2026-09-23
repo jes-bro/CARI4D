@@ -1,0 +1,31 @@
+# rclone filter: the Sub204 learner take and its five retrieval matches, relative
+# to /vision/group/egoexo4d/takes. 448p copies (recon_retrieval.py prefers those
+# over the 4K originals) plus each take's calibration, without which camera
+# matching falls back to best_exo.
+#
+#   rclone copy scdt:/vision/group/egoexo4d/takes ~/egoexo4d --filter-from splits/sub204-matches-pull.txt -P
+#
+# Ranks 1 and 3 are the same take (unc_basketball_03-31-23_01_22), so five hits
+# need four expert takes.
+
+# learner: Date170_Sub204_bball_t004a, participant 560, Reverse Layup
++ /sfu_basketball014_4/frame_aligned_videos/downscaled/448/*.mp4
++ /sfu_basketball014_4/trajectory/gopro_calibs.csv
+
+# rank 1 + 3: Date08_Sub09_bball_t022a / t022as01s01, participant 385
++ /unc_basketball_03-31-23_01_22/frame_aligned_videos/downscaled/448/*.mp4
++ /unc_basketball_03-31-23_01_22/trajectory/gopro_calibs.csv
+
+# rank 2: Date03_Sub01_bball_rev009c, participant 387 (Late Expert)
++ /unc_basketball_03-31-23_02_9/frame_aligned_videos/downscaled/448/*.mp4
++ /unc_basketball_03-31-23_02_9/trajectory/gopro_calibs.csv
+
+# rank 4: Date06_Sub04_bball_t018c, participant 382 (Late Expert)
++ /unc_basketball_03-30-23_02_18/frame_aligned_videos/downscaled/448/*.mp4
++ /unc_basketball_03-30-23_02_18/trajectory/gopro_calibs.csv
+
+# rank 5: Date03_Sub02_bball_rev033c, participant 388 (Late Expert)
++ /unc_basketball_03-31-23_02_33/frame_aligned_videos/downscaled/448/*.mp4
++ /unc_basketball_03-31-23_02_33/trajectory/gopro_calibs.csv
+
+- *
