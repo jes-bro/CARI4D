@@ -1,0 +1,203 @@
+# rclone filter: the Aria egocentric RGB stream (aria01_214-1.mp4, 1408x1408 fisheye,
+# same frame alignment as the exo cams) for the stirring and pouring takes of the
+# 16 packed cooking experts, relative to /vision/group/egoexo4d/takes. Salad takes
+# are left out: no stirring, no pouring. The kitchen pilot (Date03_Sub01_mpot_pour =
+# iiith_cooking_57_2, participant 50, milk tea) comes first, then the other pouring
+# takes, then the stirring takes.
+#
+#   rclone copy scdt:/vision/group/egoexo4d/takes ~/egoexo4d --filter-from splits/kitchen-ego-pull.txt -P
+#
+# Add --dry-run to see the list first. To pull only the pilot participant, keep the
+# participant=50 lines and comment the rest out.
+# 61 takes, 308 min of footage. Aria RGB is roughly 1 MB/s, so expect on the order of 18 GB.
+# Masks want the full-res file; the 448 copy of the same stream is the last block, for a quick look.
+#
+# take                            task                       participant  tier                  sec
+# iiith_cooking_57_2               Making Milk Tea            50           Intermediate Expert   189
+# iiith_cooking_02_3               Making Milk Tea            49           Novice                357
+# iiith_cooking_03_3               Making Milk Tea            50           Intermediate Expert   300
+# iiith_cooking_05_1               Making Milk Tea            50           Intermediate Expert   236
+# iiith_cooking_09_1               Making Milk Tea            52           None                  186
+# iiith_cooking_10_1               Making Milk Tea            52           None                  182
+# iiith_cooking_15_1               Making Milk Tea            53           None                  282
+# iiith_cooking_18_1               Making Milk Tea            53           Intermediate Expert   262
+# iiith_cooking_24_1               Making Milk Tea            54           Early Expert          164
+# iiith_cooking_25_1               Making Milk Tea            55           Intermediate Expert   241
+# iiith_cooking_27_1               Making Milk Tea            55           None                  254
+# iiith_cooking_29_1               Making Milk Tea            56           Intermediate Expert   269
+# iiith_cooking_31_1               Making Milk Tea            56           Intermediate Expert   216
+# iiith_cooking_41_1               Making Milk Tea            58           Intermediate Expert   211
+# iiith_cooking_43_1               Making Milk Tea            58           Intermediate Expert   197
+# iiith_cooking_45_1               Making Milk Tea            58           Intermediate Expert   200
+# iiith_cooking_58_2               Making Milk Tea            61           None                  143
+# iiith_cooking_60_2               Making Milk Tea            61           Intermediate Expert   148
+# sfu_cooking_003_5                Making Milk Tea            109          Early Expert          273
+# sfu_cooking_006_1                Making Chai Tea            112          Intermediate Expert   880
+# sfu_cooking_008_5                Making Coffee latte        114          Intermediate Expert   177
+# sfu_cooking_009_5                Making Chai Tea            115          Early Expert          331
+# sfu_cooking_009_7                Making Chai Tea            115          Early Expert          242
+# iiith_cooking_65_4               Making Milk Tea            190          None                  97
+# iiith_cooking_89_6               Making Milk Tea            530          None                  189
+# iiith_cooking_01_1               Cooking an Omelet          49           Early Expert          879
+# iiith_cooking_134_2              Cooking Tomato & Eggs      49           None                  468
+# iiith_cooking_135_2              Cooking Tomato & Eggs      49           None                  399
+# iiith_cooking_136_2              Cooking Tomato & Eggs      49           None                  428
+# iiith_cooking_04_1               Cooking an Omelet          50           Early Expert          410
+# iiith_cooking_05_5               Cooking an Omelet          50           Early Expert          319
+# iiith_cooking_141_2              Cooking Tomato & Eggs      50           None                  356
+# iiith_cooking_142_2              Cooking Tomato & Eggs      50           None                  246
+# iiith_cooking_142_4              Cooking Tomato & Eggs      50           None                  257
+# iiith_cooking_143_2              Cooking Tomato & Eggs      50           None                  294
+# iiith_cooking_56_2               Cooking an Omelet          50           Early Expert          281
+# iiith_cooking_11_1               Cooking an Omelet          52           Early Expert          346
+# iiith_cooking_12_1               Cooking an Omelet          52           Early Expert          282
+# iiith_cooking_13_1               Cooking an Omelet          53           Novice                467
+# iiith_cooking_16_1               Cooking an Omelet          53           Novice                402
+# iiith_cooking_19_1               Cooking an Omelet          54           Novice                340
+# iiith_cooking_22_1               Cooking an Omelet          54           None                  240
+# iiith_cooking_26_1               Cooking an Omelet          55           Early Expert          291
+# iiith_cooking_28_1               Cooking an Omelet          55           Early Expert          338
+# iiith_cooking_30_1               Cooking an Omelet          56           Novice                330
+# iiith_cooking_32_1               Cooking an Omelet          56           Novice                291
+# iiith_cooking_40_1               Cooking an Omelet          58           Intermediate Expert   212
+# iiith_cooking_42_1               Cooking an Omelet          58           Intermediate Expert   183
+# iiith_cooking_44_1               Cooking an Omelet          58           Intermediate Expert   169
+# iiith_cooking_137_2              Cooking Tomato & Eggs      61           None                  349
+# iiith_cooking_138_2              Cooking Tomato & Eggs      61           None                  282
+# iiith_cooking_55_2               Cooking an Omelet          61           Novice                424
+# iiith_cooking_59_2               Cooking an Omelet          61           Novice                280
+# sfu_cooking_003_1                Cooking Scrambled Eggs     109          Early Expert          487
+# sfu_cooking_008_1                Cooking Tomato & Eggs      114          Intermediate Expert   586
+# sfu_cooking_009_3                Cooking an Omelet          115          Early Expert          414
+# iiith_cooking_64_2               Cooking an Omelet          190          Early Expert          295
+# iiith_cooking_77_2               Cooking an Omelet          523          Early Expert          161
+# iiith_cooking_79_2               Cooking an Omelet          523          Early Expert          163
+# iiith_cooking_89_2               Cooking an Omelet          530          Early Expert          326
+# iiith_cooking_90_2               Cooking an Omelet          530          Early Expert          282
+
+# full-res Aria RGB
++ /iiith_cooking_57_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_02_3/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_03_3/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_05_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_09_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_10_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_15_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_18_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_24_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_25_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_27_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_29_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_31_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_41_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_43_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_45_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_58_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_60_2/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_003_5/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_006_1/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_008_5/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_009_5/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_009_7/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_65_4/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_89_6/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_01_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_134_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_135_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_136_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_04_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_05_5/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_141_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_142_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_142_4/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_143_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_56_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_11_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_12_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_13_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_16_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_19_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_22_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_26_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_28_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_30_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_32_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_40_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_42_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_44_1/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_137_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_138_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_55_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_59_2/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_003_1/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_008_1/frame_aligned_videos/aria01_214-1.mp4
++ /sfu_cooking_009_3/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_64_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_77_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_79_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_89_2/frame_aligned_videos/aria01_214-1.mp4
++ /iiith_cooking_90_2/frame_aligned_videos/aria01_214-1.mp4
+
+# 448p copy of the same stream, for a quick look (skip the block if you only want full res)
++ /iiith_cooking_57_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_02_3/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_03_3/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_05_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_09_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_10_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_15_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_18_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_24_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_25_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_27_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_29_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_31_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_41_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_43_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_45_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_58_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_60_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_003_5/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_006_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_008_5/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_009_5/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_009_7/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_65_4/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_89_6/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_01_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_134_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_135_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_136_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_04_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_05_5/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_141_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_142_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_142_4/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_143_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_56_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_11_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_12_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_13_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_16_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_19_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_22_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_26_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_28_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_30_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_32_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_40_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_42_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_44_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_137_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_138_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_55_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_59_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_003_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_008_1/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /sfu_cooking_009_3/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_64_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_77_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_79_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_89_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
++ /iiith_cooking_90_2/frame_aligned_videos/downscaled/448/aria01_214-1.mp4
+- **
