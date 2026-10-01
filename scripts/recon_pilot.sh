@@ -151,7 +151,8 @@ place_mesh() {
         if [ -n "$DRY_RUN" ]; then echo "  would copy $src -> $dst" >&2; continue; fi
         mkdir -p "$MESH_DIR" && cp -r "$src" "$dst"
         for f in "$dst"/*_align.obj; do
-            [ -f "$f" ] && mv "$f" "$dst/${SEQ}_${frame}_align.obj"
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = "${SEQ}_${frame}_align.obj" ] || mv "$f" "$dst/${SEQ}_${frame}_align.obj"
         done
         log "placed mesh from $src as $dst"
     done
