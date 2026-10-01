@@ -67,8 +67,13 @@ export TRITON_CACHE_DIR=$CACHE_ROOT/triton_cache
 mkdir -p "$HF_HOME" "$TORCH_HOME" "$TORCH_EXTENSIONS_DIR" "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR"
 export PYTHONUNBUFFERED=1
 
+# The env's conda-forge compiler packages ship activate hooks that read
+# variables they have not set (ADDR2LINE, CONDA_BACKUP_CXX), which is fatal
+# under set -u. Relax it just for the activation.
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "${SAM3D_ENV:-sam3d-objects}"
+set -u
 
 cd "$REPO"
 
