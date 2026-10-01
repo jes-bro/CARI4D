@@ -2,8 +2,8 @@
 # One command, one take: run every stage up to the checkpoint that matters,
 # waiting for the cluster in between, then say what to look at.
 #
-#   TAKE=iiith_cooking_57_2 SEQ=Date03_Sub06_mpot_pour \
-#   HUMAN_PROMPT=person OBJECT_PROMPT=pot \
+#   TAKE=iiith_cooking_57_2 SEQ=Date03_Sub06_mpot_pour CLIP_LO=5190 CLIP_HI=5550 \
+#   HUMAN_PROMPT=person OBJECT_PROMPT="metal saucepan with handle" \
 #       nohup bash scripts/recon_pilot.sh > pilot-mpot.log 2>&1 &
 #
 #   tail -f pilot-mpot.log        # or: cat work/<seq>/NEXT.txt when it is done
@@ -17,9 +17,9 @@
 # What it runs, in order, and why it waits where it waits:
 #
 #   0  recon_check.sh      the inputs exist (seconds, no job)
-#   1a recon_clips.sh      SAM3 over the whole take on the pipeline camera
-#      -- WAIT: which clips came out is not known until this finishes --
-#   1b recon_masks.sh      per clip: aux views at 4K, and the EGO view, masked
+#   1a the window          pipeline camera cut to CLIP_LO-CLIP_HI and masked
+#      -- WAIT: everything after reads those masks --
+#   1b recon_masks.sh      aux views at 4K, and the EGO view, masked
 #      -- WAIT: geometry and the mesh both read these masks --
 #   2  recon_geometry.sh   triangulate (ego ray included), rectify
 #      recon_object.sh     the mesh, from the best (view, frame) the picker finds
@@ -30,15 +30,16 @@
 # and removes the babysitting between the others. THROUGH=solve runs stage 3
 # too, unattended, when you already trust this take.
 #
-# CLIPS=a (default) takes only the longest clip stage 1a emitted; CLIPS=all
-# takes every one. Re-running is safe: a stage whose main output already exists
-# is skipped, so a pilot that died waiting picks up where it was.
+# CLIP_LO / CLIP_HI, in TAKE frames, are REQUIRED: the window to reconstruct.
+# The person running this has watched the take and knows where the action is,
+# so the pipeline camera is cut to exactly those frames and masked there, the
+# clip is SEQ itself (no letter), and nothing is computed on the rest of the
+# take. Letting SAM3 find a window instead (scripts/recon_clips.sh) is for a
+# batch nobody has watched; on a kitchen take where person and pot are in
+# frame throughout it finds the whole take.
 #
-# CLIP_LO / CLIP_HI, in TAKE frames, cut the chosen clip down to that window
-# before the aux views are masked (prep/retrim_clip.py; the new clip is named
-# <clip>t). For a kitchen take where person and pot are in frame throughout,
-# SAM3 emits the whole take as one clip, and masking four 4K views of 5,000
-# frames to reconstruct a 12 s pour is the wrong shape of job.
+# Re-running is safe: a stage whose main output already exists is skipped, so
+# a pilot that died waiting picks up where it was.
 #
 # MESH_FROM=<mesh root> drops an already reconstructed object in instead of
 # running the object stage: the <seq>_<frame>_rgba/ directory there is copied
@@ -55,7 +56,9 @@ source scripts/recon_common.sh
 recon_require_env
 recon_paths
 
-CLIPS="${CLIPS:-a}"
+: "${CLIP_LO:?set CLIP_LO, the first take frame of the window}"
+: "${CLIP_HI:?set CLIP_HI, the last take frame of the window (inclusive)}"
+[ "$CLIP_HI" -gt "$CLIP_LO" ] || { echo "ERROR: CLIP_HI must exceed CLIP_LO" >&2; exit 1; }
 THROUGH="${THROUGH:-object}"
 case "$THROUGH" in object|solve) ;; *) echo "ERROR: THROUGH must be object or solve" >&2; exit 1 ;; esac
 
@@ -104,65 +107,35 @@ else
 fi
 log "prompts: human='$HUMAN_PROMPT' object='$OBJECT_PROMPT'  pipeline cam=$PIPE_CAM"
 
-# --- 1a: cut the take into clips --------------------------------------------
-if [ -f "$CLIPS_JSON" ] && [ -z "${FORCE:-}" ]; then
-    log "1a clips: already done ($CLIPS_JSON exists)"
+# --- 1a: the window. The pipeline camera cut to it and masked. --------------
+clips=("$BASE_SEQ")
+n_win=$((CLIP_HI - CLIP_LO + 1))
+if [ -f "$WINDOW_JSON" ] && [ -f "$MASKS_DIR/${SEQ}_masks_k0.h5" ] && [ -z "${FORCE:-}" ]; then
+    log "1a window: already done ($WINDOW_JSON and the $PIPE_CAM masks exist)"
 else
-    log "1a clips: submitting"
-    ids=()
-    run_stage clips
-    recon_wait "${ids[@]}"
-fi
-
-# Which clips to carry on with. Under DRY_RUN nothing was written, so the plan
-# is shown for the clip stage 1a would most likely emit.
-all_clips=()
-if [ -n "$DRY_RUN" ] && [ ! -f "$CLIPS_JSON" ]; then
-    clips=("${BASE_SEQ}a")
-else
-    mapfile -t all_clips < <(python3 -c "import json,sys
-print('\n'.join(c['seq'] for c in json.load(open(sys.argv[1]))['clips']))" "$CLIPS_JSON")
-    [ ${#all_clips[@]} -gt 0 ] || {
-        echo "ERROR: stage 1a emitted no clip: SAM3 never held both masks for $MIN_FRAMES frames." >&2
-        echo "       Watch $MASKS_DIR/${BASE_SEQ}_sam3_vis.mp4 and retry with other prompts." >&2
-        exit 1; }
-    if [ "$CLIPS" = all ]; then
-        clips=("${all_clips[@]}")
-    else
-        clips=("${all_clips[0]}")
+    log "1a window: $PIPE_CAM (448) cut to take frames $CLIP_LO-$CLIP_HI ($n_win frames) as $SEQ"
+    recon_run mkdir -p "$CLIPS_DIR"
+    # The window file every later stage reads: the aux and ego trims cut to
+    # it, geometry takes the ego offset from it, the object stage defaults its
+    # frame from it. Written here, not by SAM3, because with --no_trim SAM3
+    # chooses nothing.
+    if [ -z "$DRY_RUN" ]; then
+        python3 -c "import json,sys; json.dump({'seq': sys.argv[1], 'source': 'recon_pilot CLIP_LO/CLIP_HI', 'num_frames': int(sys.argv[4]), 'runs': [], 'chosen': {'lo': int(sys.argv[2]), 'hi': int(sys.argv[3]), 'n_frames': int(sys.argv[4]), 'covered_frac': 1.0}}, open(sys.argv[5], 'w'), indent=1)" "$SEQ" "$CLIP_LO" "$CLIP_HI" "$n_win" "$WINDOW_JSON"
     fi
-fi
-log "clips: ${clips[*]}  (of ${#all_clips[@]} emitted; CLIPS=$CLIPS)"
-
-# --- 1a': cut the clip(s) to the requested window ------------------------------
-# Take frames in, clip frames to retrim_clip.py, which numbers from the clip's
-# own frame 0. A window outside the clip is an error, not a clamp: the clip
-# would silently be something other than what was asked for.
-if [ -n "${CLIP_LO:-}" ] || [ -n "${CLIP_HI:-}" ]; then
-    : "${CLIP_LO:?set both CLIP_LO and CLIP_HI}" "${CLIP_HI:?set both CLIP_LO and CLIP_HI}"
-    cut=()
-    for clip in "${clips[@]}"; do
-        new="${clip}t"
-        if [ -d "$WORK_ROOT/$new" ] && [ -z "${FORCE:-}" ]; then
-            log "1a' retrim $clip: already done ($new exists)"
-            cut+=("$new"); continue
-        fi
-        if [ -n "$DRY_RUN" ]; then
-            log "1a' retrim $clip -> $new: would cut take frames $CLIP_LO-$CLIP_HI"
-            cut+=("$new"); continue
-        fi
-        read -r lo hi < <(python3 -c "import json,sys; w=json.load(open(sys.argv[1]))['chosen']; print(w['lo'], w['hi'])" "$WORK_ROOT/$clip/window.json")
-        if [ "$CLIP_LO" -lt "$lo" ] || [ "$CLIP_HI" -gt "$hi" ]; then
-            echo "ERROR: window $CLIP_LO-$CLIP_HI is outside clip $clip (take frames $lo-$hi)" >&2
-            exit 1
-        fi
-        log "1a' retrim $clip -> $new: take frames $CLIP_LO-$CLIP_HI (clip frames $((CLIP_LO - lo))-$((CLIP_HI - lo)))"
-        conda run -n "${CARI4D_ENV:-newcari4d}" python prep/retrim_clip.py \
-            --work "$WORK_ROOT/$clip" --lo $((CLIP_LO - lo)) --hi $((CLIP_HI - lo)) --new_seq "$new" >&2
-        cut+=("$new")
-    done
-    clips=("${cut[@]}")
-    log "clips after retrim: ${clips[*]}"
+    ids=()
+    export SRC_DIR="$FAV_DIR/downscaled/448" OUT_DIR="$CLIPS_DIR" SUFFIX="" CAMS="$PIPE_CAM" \
+           OUT_NAME="$SEQ" START="$CLIP_LO" END="$CLIP_HI"
+    job=$(recon_sbatch --job-name="c0-$SEQ" scripts/slurm_trim_clips.sh)
+    ids+=("$job"); log "1a window: trim $PIPE_CAM                job $job"
+    unset OUT_NAME SUFFIX START END
+    export VIDEO="$PIPE_CLIP" OUT_DIR="$MASKS_DIR" NO_TRIM=1
+    export HUMAN="$HUMAN_PROMPT" OBJECT="$OBJECT_PROMPT"
+    unset CHUNK WINDOW_JSON EMIT_ROOT CLIPS_JSON
+    job=$(recon_sbatch $(recon_dep "${ids[@]}") --job-name="c1-$SEQ" scripts/slurm_sam3_masks.sh)
+    ids+=("$job"); log "1a window: sam3 $PIPE_CAM (no trim)      job $job"
+    unset NO_TRIM VIDEO HUMAN OBJECT
+    recon_paths   # restore WINDOW_JSON and friends for the stages below
+    recon_wait "${ids[@]}"
 fi
 
 place_mesh() {

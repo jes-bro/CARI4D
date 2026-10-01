@@ -35,6 +35,9 @@
 #
 # Output naming: <OUT_DIR>/<cam><SUFFIX>.0.color.mp4 -- the .0.color.mp4
 # convention is what run_sam3_masks.py parses the sequence name from.
+# OUT_NAME=<name> replaces <cam><SUFFIX> outright, for cutting the PIPELINE
+# camera to a window the caller already knows: that clip has to carry the
+# sequence's name, not the camera's. Only meaningful with a single CAMS entry.
 
 set -euo pipefail
 
@@ -93,7 +96,7 @@ echo "[trim] frame-rate flag: ${FPS_MODE[*]}"
 rc=0
 for c in $CAMS; do
     src="$SRC_DIR/$c.mp4"
-    out="$OUT_DIR/$c$SUFFIX.0.color.mp4"
+    out="$OUT_DIR/${OUT_NAME:-$c$SUFFIX}.0.color.mp4"
     if [ ! -f "$src" ]; then
         echo "[trim] ERROR: no source video at $src" >&2
         rc=1
