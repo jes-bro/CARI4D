@@ -38,6 +38,26 @@ recon_paths
 
 log() { echo "[recon-solve] $*" >&2; }
 
+# --- where the object comes from -----------------------------------------------
+# OBJECT_FROM=ego: the object is tracked in the ego view (slurm_ego_object.sh)
+# and the triangulated position is not used at all. The injected depth, the
+# FP pickle CoCoNet reads and the metric mesh all come from that job, so the
+# triangulation file is swapped for the ego one and the pipeline-camera FP and
+# scale jobs are skipped.
+case "$OBJECT_FROM" in
+    tri) ;;
+    ego)
+        recon_ego_ready || { echo "ERROR: OBJECT_FROM=ego but this take has no usable ego view" >&2; exit 1; }
+        if [ -z "$DRY_RUN" ]; then
+            for required in "$EGO_CLIP" "$EGO_MASKS"; do
+                [ -e "$required" ] || { echo "ERROR: OBJECT_FROM=ego needs stage 1b's ego output: $required" >&2; exit 1; }
+            done
+        fi
+        export OBJECT_XYZ="$OBJECT_XYZ_EGO"
+        ;;
+    *) echo "ERROR: OBJECT_FROM must be tri or ego (got '$OBJECT_FROM')" >&2; exit 1 ;;
+esac
+
 # --- FoundationPose knobs ----------------------------------------------------
 # ZFAR and DEPTH_HUMAN_BAND are DERIVED from this clip's own triangulated
 # geometry, not carried over from a basketball at seven metres: the first is
@@ -100,13 +120,15 @@ SAVE_NAME="${SAVE_NAME:-optj3d}"
 OPT_EXTRA="${OPT_EXTRA:-opt_smpl_trans=True w_init_ht=0 w_j3d=500 j3d_file=$HUMAN_J3D}"
 
 if [ -z "$DRY_RUN" ]; then
-    for required in "$RECT_CLIP" "$OBJECT_XYZ" "$HUMAN_J3D" "$CALIB" \
+    for required in "$RECT_CLIP" "$HUMAN_J3D" "$CALIB" \
                     "$RECT_DIR/${SEQ}_masks_k0.h5" "$MESH_DIR"; do
         [ -e "$required" ] || { echo "ERROR: missing stage-2 output: $required" >&2; exit 1; }
     done
+    [ "$OBJECT_FROM" = ego ] || [ -e "$OBJECT_XYZ" ] || {
+        echo "ERROR: missing stage-2 output: $OBJECT_XYZ" >&2; exit 1; }
 fi
 
-log "take=$TAKE  seq=$SEQ  work=$WORK"
+log "take=$TAKE  seq=$SEQ  work=$WORK  object from: $OBJECT_FROM"
 log "fp: tstart=$TSTART zfar=$ZFAR erode=$ERODE_DEPTH_THRES reinit=$REINIT_EVERY band=$DEPTH_HUMAN_BAND mad_k=$DEPTH_MAD_K"
 log "opt: identifier=$IDENTIFIER save_name=$SAVE_NAME extra='$OPT_EXTRA'"
 
@@ -125,27 +147,50 @@ export HY3D_ROOT="$MESH_DIR" NLF_PATH="$NLF_DIR" FP_ROOT="$FP_DIR"
 # object entirely.
 export TSTART ZFAR ERODE_DEPTH_THRES REINIT_EVERY DEPTH_HUMAN_BAND DEPTH_MAD_K
 
+# --- E: the object from the ego view, when asked. Independent of G: it reads
+#        the ego clip and masks from stage 1b and the mesh, nothing from the
+#        pipeline camera. Writes the FP pickle, the object centres and the
+#        metric mesh that H and I read. -------------------------------------------
+job_e=""
+if [ "$OBJECT_FROM" = ego ]; then
+    job_e=$(recon_sbatch --job-name="s0-ego-$SEQ" scripts/slurm_ego_object.sh)
+    log "E  object tracked in the ego view     job $job_e"
+fi
+
 job_g=$(recon_sbatch --job-name="s1-$SEQ" \
     scripts/slurm_prep_aligned.sh "$RECT_CLIP")
 log "G  unidepth -> nlf -> smplh -> align  job $job_g"
 
-# --- H: triangulated depth into the object mask -----------------------------
-job_h=$(recon_sbatch $(recon_dep "$job_g") \
+# --- H: object depth into the object mask: triangulated, or the ego track's --
+job_h=$(recon_sbatch $(recon_dep "$job_g" "$job_e") \
     --job-name="s2-$SEQ" \
     scripts/slurm_inject_depth.sh "$ALIGNED_CLIP")
-log "H  inject triangulated ball depth     job $job_h"
+log "H  inject object depth ($OBJECT_FROM)     job $job_h"
 
 # --- I: FP -> CoCoNet -> optimization ---------------------------------------
 export IDENTIFIER SAVE_NAME OPT_EXTRA
-job_s=$(recon_sbatch $(recon_dep "$job_h") \
-    --job-name="s2b-$SEQ" \
-    scripts/slurm_scale_object.sh "$ALIGNED_CLIP")
-log "S  object metric scale (post-inject)  job $job_s"
+if [ "$OBJECT_FROM" = ego ]; then
+    # Scale and tracking both happened in the ego camera; job E delivered the
+    # metric mesh and the FP pickle under the pipeline sequence's names.
+    job_s="$job_h"
+    log "S  object metric scale: from the ego job"
+    export SKIP_FP=1
+else
+    job_s=$(recon_sbatch $(recon_dep "$job_h") \
+        --job-name="s2b-$SEQ" \
+        scripts/slurm_scale_object.sh "$ALIGNED_CLIP")
+    log "S  object metric scale (post-inject)  job $job_s"
+    unset SKIP_FP
+fi
 
 job_i=$(recon_sbatch $(recon_dep "$job_s") \
     --job-name="s3-$SEQ" \
     scripts/slurm_fp_onward.sh "$ALIGNED_CLIP")
-log "I  foundationpose -> coconet -> opt   job $job_i"
+if [ -n "${SKIP_FP:-}" ]; then
+    log "I  coconet -> opt (fp from the ego)   job $job_i"
+else
+    log "I  foundationpose -> coconet -> opt   job $job_i"
+fi
 
 # --- J: the render you actually judge it by ---------------------------------
 RESULT_DIR="output/opt/${EXP_NAME:-cari4d-release}+${EXP_STEP:-step031397}${IDENTIFIER}-hy3d3-${SAVE_NAME}"
@@ -155,10 +200,17 @@ job_j=$(recon_sbatch $(recon_dep "$job_i") \
     scripts/slurm_viz_pred.sh "$RESULT_DIR/$SEQ.pth" "$ALIGNED_CLIP")
 log "J  render                             job $job_j"
 
+if [ "$OBJECT_FROM" = ego ]; then
+    scale_check=("grep -E 'metric mesh|frames carried|object distance|motion per frame' ego-object-${job_e}.out"
+                 "# the object's size in metres from the ego fit, and how many ego frames"
+                 "# made it into the pipeline camera. Motion per frame should be centimetres.")
+else
+    scale_check=("tail -18 recon-scale-${job_s}.out"
+                 "# the object's MEASURED size, and whether the views agreed on it."
+                 "# Views disagreeing badly means a mask is on something else.")
+fi
 recon_check \
-    "tail -18 recon-scale-${job_s}.out" \
-    "# the object's MEASURED size, and whether the views agreed on it." \
-    "# Views disagreeing badly means a mask is on something else." \
+    "${scale_check[@]}" \
     "" \
     "ls -lat output/viz-pred/ | head -3" \
     "# watch the newest mp4 (the filename is timestamped, so it is the fresh one)." \

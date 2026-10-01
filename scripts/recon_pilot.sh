@@ -41,6 +41,11 @@
 # Re-running is safe: a stage whose main output already exists is skipped, so
 # a pilot that died waiting picks up where it was.
 #
+# OBJECT_FROM=ego tracks the object in the ego view only (scripts/
+# slurm_ego_object.sh, run by stage 3) and carries the poses into the pipeline
+# camera; the exo cameras then contribute nothing to the object. The default,
+# tri, is the triangulate-and-inject path.
+#
 # MESH_FROM=<mesh root> drops an already reconstructed object in instead of
 # running the object stage: the <seq>_<frame>_rgba/ directory there is copied
 # into the clip's meshes/ and renamed for the clip. The frame in its name must

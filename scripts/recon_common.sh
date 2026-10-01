@@ -390,6 +390,21 @@ recon_paths() {
     export EGO_MASKS="$MASKS_DIR/${EGO_SEQ}_masks_k0.h5"
     export ARIA_CALIB="$TAKE_DIR/trajectory/online_calibration.jsonl"
     export ARIA_EXTRINSICS="$TAKE_DIR/trajectory/aria_extrinsics.json"
+
+    # Where the object comes from in stage 3. 'tri' is the original path:
+    # triangulated position injected into the pipeline camera's depth, then
+    # FoundationPose in that camera. 'ego' tracks the object in the ego view
+    # instead (scripts/slurm_ego_object.sh) and carries the poses over; the
+    # exo cameras then contribute nothing to the object at all, which is the
+    # right call when their masks cannot be trusted and the ego's can.
+    export OBJECT_FROM="${OBJECT_FROM:-tri}"
+    # The ego run is a monocular sequence of its own, named so the loaders
+    # still parse Date_Sub_object_action out of it (object = split('_')[2]).
+    export EGO_PIPE_SEQ="$SEQ-ego"
+    export EGO_RECT_DIR="$WORK/rect-ego"
+    export EGO_MESH_DIR="$WORK/meshes-ego"
+    export EGO_FP_DIR="$WORK/fp-ego"
+    export OBJECT_XYZ_EGO="$GEOM_DIR/object_xyz_ego.npz"
 }
 
 recon_ego_ready() {
@@ -492,7 +507,7 @@ recon_sbatch() {
         # only the sbatch line would hide everything worth checking.
         for v in VIDEO OUT_DIR WINDOW_JSON EMIT_ROOT CLIPS_JSON \
                  EMIT_MIN_FRAMES EMIT_MAX_CLIPS TRIM_GAP NO_TRIM CHUNK HUMAN OBJECT \
-                 EGO_SEQ EGO_CLIP MESH_BACKEND \
+                 EGO_SEQ EGO_CLIP MESH_BACKEND OBJECT_FROM OBJECT_XYZ SKIP_FP \
                  OBJECT_SELECT OBJECT_OPEN TRIM_MIN_OBJECT_PX TRIM_MIN_PERSON_PX \
                  HUMAN_INSTANCES HUMAN2_SEQ \
                  SRC_DIR CAMS SUFFIX START END MIN_FRAMES \

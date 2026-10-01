@@ -119,11 +119,20 @@ for required in "$video" "$depth_video" "$masks_root" "$packed_root" "${hy3d_roo
 done
 
 # Step 5.2: FoundationPose in tracking mode (verbatim from demo-custom.sh).
+# SKIP_FP=1 when the pickle under fp_root was produced elsewhere -- the object
+# tracked in the ego camera and carried over by scripts/slurm_ego_object.sh --
+# so CoCoNet reads that instead of a track made in this camera.
+if [ -n "${SKIP_FP:-}" ]; then
+    fp_pkl="${fp_root}/${video_prefix}_all.pkl"
+    [ -f "$fp_pkl" ] || { echo "ERROR: SKIP_FP set but no $fp_pkl" >&2; exit 1; }
+    log "step 5.2 skipped (SKIP_FP): using $fp_pkl"
+else
 python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 --masks_root ${masks_root} --hy3d_root=${hy3d_root}-metric \
 --video ${video} -o ${fp_root} --zfar ${zfar} -tstart ${tstart} \
 --erode_depth_thres ${erode_depth_thres} ${reinit_every:+--reinit_every ${reinit_every}} \
 --depth_human_band ${depth_human_band} --depth_mad_k ${depth_mad_k}
+fi
 
 # Step 6: CoCoNet refinement (verbatim from demo-custom.sh).
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
