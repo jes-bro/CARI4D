@@ -136,6 +136,13 @@ def load_sam3d(sam3d_root, tag):
                          f"{root}/checkpoints/{tag}")
     sys.path.insert(0, root)
     sys.path.insert(0, osp.join(root, "notebook"))
+    # sam3d_objects/__init__.py imports a sam3d_objects.init module that is not
+    # in the repository, unless this is set; the notebook wrapper sets it too,
+    # but only at its own import, and the order matters. CUDA_HOME is what
+    # their JIT-built extensions read, and the conda env ships the toolkit.
+    os.environ.setdefault("LIDRA_SKIP_INIT", "true")
+    if "CONDA_PREFIX" in os.environ:
+        os.environ.setdefault("CUDA_HOME", os.environ["CONDA_PREFIX"])
     from inference import Inference  # noqa: E402  (sam-3d-objects/notebook/inference.py)
     print(f"Loading SAM 3D Objects from {config}")
     return Inference(config, compile=False)
