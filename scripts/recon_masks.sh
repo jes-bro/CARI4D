@@ -85,7 +85,33 @@ for c in $AUX_CAMS; do
     log "C  sam3 aux $c (4K, no trim)      job $job_c"
 done
 
+# --- B'/C': the same two steps for the ego view ------------------------------
+# Its own trim job because the suffix differs (-ego, not -4k: the ego clip is
+# 1408x1408, not 4K, and the name is what tells the readers which model to
+# unproject with). SAM3's person prompt is "hands" here -- the wearer is
+# otherwise invisible to their own glasses -- and the chunk is smaller than the
+# exo default because the frames are larger. The ego masks are OPTIONAL
+# downstream: geometry adds the ray when the file exists and carries on
+# without it, so this job failing costs the ego view, not the clip.
+if recon_ego_ready; then
+    export SRC_DIR="$FAV_DIR" OUT_DIR="$CLIPS_DIR" SUFFIX="-ego" CAMS="$EGO_CAM" \
+           WINDOW_JSON="$WORK/window.json"
+    unset NO_TRIM CHUNK HUMAN OBJECT
+    job_be=$(recon_sbatch --job-name="m1-ego-$SEQ" scripts/slurm_trim_clips.sh)
+    log "B' trim ego view to this clip        job $job_be"
+    export OUT_DIR="$MASKS_DIR" NO_TRIM=1 CHUNK="${EGO_CHUNK:-100}"
+    export HUMAN="$EGO_HUMAN_PROMPT" OBJECT="$OBJECT_PROMPT" VIDEO="$EGO_CLIP"
+    unset WINDOW_JSON
+    job_ce=$(recon_sbatch $(recon_dep "$job_be") \
+        --time="${SAM3_EGO_TIME:-06:00:00}" \
+        --job-name="m2-ego-$SEQ" scripts/slurm_sam3_masks.sh)
+    log "C' sam3 ego $EGO_CAM (no trim)   job $job_ce"
+else
+    log "no ego view for this take (EGO=$EGO, cam='${EGO_CAM:-none}')"
+fi
+
 recon_check \
+    ${EGO_SEQ:+"# the ego masks: $MASKS_DIR/${EGO_SEQ}_sam3_vis.mp4 -- is the object the right one?"} \
     "python prep/check_view_coverage.py --masks_root $MASKS_DIR --seq $SEQ" \
     "# if it reports a shorter usable run than the clip, cut the clip down:" \
     "#   python prep/retrim_clip.py --work $WORK --lo <first> --hi <last>" \

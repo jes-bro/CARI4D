@@ -97,12 +97,35 @@ if [ -z "${TRI_INLIER_PX:-}" ]; then
 fi
 log "inlier_px=${TRI_INLIER_PX:-<default>}"
 
+# --- 0b: the ego view, when stage 1b masked it. One moving camera per frame,
+#         with the Aria model, from the ego clip cut to this clip's window.
+#         Both offsets are the window's first take frame: the ego masks are
+#         numbered from the clip's frame 0, and aria_extrinsics.json is keyed
+#         by take frame. Optional on purpose -- a take without glasses, or an
+#         ego SAM3 job that failed, still triangulates from the exo views. ----
+aria_args=()
+if [ -n "${EGO_SEQ:-}" ] && [ -f "$MASKS_DIR/${EGO_SEQ}_masks_k0.h5" ]; then
+    if [ -f "${ARIA_CALIB:-/nonexistent}" ] && [ -f "${ARIA_EXTRINSICS:-/nonexistent}" ]; then
+        ego_lo=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['chosen']['lo'])" \
+                 "${WINDOW_JSON:?set WINDOW_JSON for the ego offset}")
+        aria_args=(--aria_masks_root "$MASKS_DIR" --aria_name "$EGO_SEQ" \
+                   --aria_calib "$ARIA_CALIB" --aria_extrinsics "$ARIA_EXTRINSICS" \
+                   --aria_offset "$ego_lo" --aria_masks_offset "$ego_lo")
+        log "ego view $EGO_SEQ joins triangulation (window starts at take frame $ego_lo)"
+    else
+        log "ego masks present but no Aria calibration under trajectory/; exo views only"
+    fi
+else
+    log "no ego masks; exo views only"
+fi
+
 # --- 1: the ball, in metres -------------------------------------------------
 log "triangulating the object"
 python prep/triangulate_object.py --calib "$CALIB" "${obj_views[@]}" \
     --width "${TRI_WIDTH:-796}" --height "${TRI_HEIGHT:-448}" \
     ${TRI_MAX_RESIDUAL:+--max_residual "$TRI_MAX_RESIDUAL"} \
     ${TRI_INLIER_PX:+--inlier_px "$TRI_INLIER_PX"} \
+    ${aria_args[@]+"${aria_args[@]}"} \
     --out "$OBJECT_XYZ"
 
 # --- 2: the report. Printed here so it is in this job's log, next to the run

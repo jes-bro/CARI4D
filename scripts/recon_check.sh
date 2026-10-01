@@ -40,7 +40,13 @@ done
 # The cameras are reported because they are the setting most likely to be wrong
 # and least likely to announce itself: a take reconstructed from the wrong main
 # view runs to completion and simply produces a worse answer.
-cams="main=$PIPE_CAM aux=${AUX_CAMS// /,}"
+# The ego view is reported, never MISSING: a take without glasses, or without
+# the Aria calibration, still reconstructs from the exo views alone.
+ego="ego=none"
+if [ -n "$EGO_CAM" ]; then
+    if recon_ego_ready 2>/dev/null; then ego="ego=$EGO_CAM"; else ego="ego=$EGO_CAM(no-calib)"; fi
+fi
+cams="main=$PIPE_CAM aux=${AUX_CAMS// /,} $ego"
 if [ ${#missing[@]} -eq 0 ]; then
     echo "OK      $SEQ  ($TAKE)  $cams"
 else

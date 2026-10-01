@@ -111,6 +111,47 @@ HUMAN_PROMPT_DEFAULT="one basketball player playing basketball"
 OBJECT_PROMPT_DEFAULT="ball"
 HUMAN_PROMPT="${HUMAN_PROMPT:-$HUMAN_PROMPT_DEFAULT}"
 OBJECT_PROMPT="${OBJECT_PROMPT:-$OBJECT_PROMPT_DEFAULT}"
+# A scene with no object at all -- partner dance. NO_OBJECT=1 (or a manifest
+# object_prompt of `none`) empties the prompt: SAM3 writes empty object masks
+# and trims on the people, and the guard below is satisfied because an empty
+# prompt is not the basketball default.
+[ -n "${NO_OBJECT:-}" ] && OBJECT_PROMPT=""
+
+# How many people SAM3 tracks, and the second person's sequence name. Two for
+# a partner dance; the second dancer is a sequence of their own, sharing the
+# clip, and by default takes the participant's name with the Sub slot swapped
+# between the male and female bodies (Sub01 <-> Sub06) -- a placeholder for
+# the partner's gender until someone looks at the footage. Set HUMAN2_SEQ to
+# choose it. Which of the two sequences holds the participant is decided after
+# masking by prep/label_dancers.py (scripts/recon_human.sh label).
+HUMAN_INSTANCES="${HUMAN_INSTANCES:-}"
+HUMAN2_SEQ_EXPLICIT="${HUMAN2_SEQ:-}"
+
+# The Aria ego stream. The wearer's own view is the one camera that is metres
+# from the object rather than tens, with no body between it and the thing
+# being tracked -- which is where the exo views lose a pot behind a torso or a
+# ball behind legs. It joins in two places: SAM3 masks on an ego clip cut to
+# the same window become an extra moving ray in triangulate_object.py (which
+# already carries the Aria camera model and per-frame poses), and the ego crop
+# is usually the best source for the object mesh. The ego cannot see the
+# wearer, so it contributes nothing to the human.
+#
+# EGO=0 leaves the ego out entirely. EGO_CAM names the stream (aria01_214-1,
+# aria02_214-1: the glasses' index differs per capture); unset, recon_paths()
+# reads it off the take's own files. EGO_HUMAN_PROMPT is SAM3's person prompt
+# on the ego clip, where only hands are visible.
+EGO="${EGO:-1}"
+EGO_CAM_EXPLICIT="${EGO_CAM:-}"
+EGO_HUMAN_PROMPT="${EGO_HUMAN_PROMPT:-hands}"
+export EGO EGO_HUMAN_PROMPT
+recon_partner_seq() {
+    # The second dancer's sequence name for $1: Sub01 <-> Sub06, else _p2.
+    case "$1" in
+        *_Sub06_*) echo "${1/_Sub06_/_Sub01_}" ;;
+        *_Sub01_*) echo "${1/_Sub01_/_Sub06_}" ;;
+        *) echo "${1}_p2" ;;
+    esac
+}
 
 # SAM3 selection knobs, passed through to run_sam3_masks.py when set and left
 # to its defaults otherwise. They were unreachable from the drivers before, so
@@ -297,6 +338,13 @@ recon_paths() {
     # environment rather than --export=ALL,K=V, so anything a job reads has to
     # be exported here or at the call site.
     export TAKE SEQ PIPE_CAM PIPE_CAM_SOURCE AUX_CAMS MIN_FRAMES HUMAN_PROMPT OBJECT_PROMPT
+    # Second dancer's name follows the sequence, so a batch re-derives it per row.
+    if [ "$HUMAN_INSTANCES" = 2 ]; then
+        HUMAN2_SEQ="${HUMAN2_SEQ_EXPLICIT:-$(recon_partner_seq "$SEQ")}"
+    else
+        HUMAN2_SEQ=""
+    fi
+    export HUMAN_INSTANCES HUMAN2_SEQ
     export WORK="$WORK_ROOT/$SEQ"
     export TAKE_DIR="$TAKES_ROOT/$TAKE"
     export FAV_DIR="$TAKE_DIR/frame_aligned_videos"
@@ -321,6 +369,77 @@ recon_paths() {
     export MESH_DIR="$WORK/meshes"
     export NLF_DIR="$WORK/nlf"
     export FP_DIR="$WORK/fp"
+
+    # The ego stream of THIS take, read off disk like the exo cameras: the
+    # glasses are aria01 in one capture and aria02 in another. Empty when the
+    # take has none, or EGO=0, and every ego step is skipped on an empty name.
+    EGO_CAM=""
+    if [ "$EGO" != 0 ]; then
+        if [ -n "$EGO_CAM_EXPLICIT" ]; then
+            EGO_CAM="$EGO_CAM_EXPLICIT"
+        else
+            EGO_CAM=$(cd "$FAV_DIR" 2>/dev/null && ls aria*_214-1.mp4 2>/dev/null \
+                      | head -1 | sed 's/\.mp4$//') || true
+        fi
+    fi
+    export EGO_CAM
+    # The ego clip is named like an aux clip (<cam><suffix>.0.color.mp4), so
+    # SAM3 names its mask set <cam>-ego and every later reader finds it by that.
+    export EGO_SEQ="${EGO_CAM:+$EGO_CAM-ego}"
+    export EGO_CLIP="$CLIPS_DIR/$EGO_SEQ.0.color.mp4"
+    export EGO_MASKS="$MASKS_DIR/${EGO_SEQ}_masks_k0.h5"
+    export ARIA_CALIB="$TAKE_DIR/trajectory/online_calibration.jsonl"
+    export ARIA_EXTRINSICS="$TAKE_DIR/trajectory/aria_extrinsics.json"
+}
+
+recon_ego_ready() {
+    # Whether the ego view can be used for this take: a stream, and both
+    # calibration files triangulate_object.py reads for it. Says on stderr
+    # what is missing, once, so a take silently reconstructed without its ego
+    # view does not happen -- that is the "ran to completion, just worse"
+    # failure every setting here is guarded against.
+    [ -n "$EGO_CAM" ] || return 1
+    local missing=()
+    [ -f "$ARIA_CALIB" ] || missing+=("$(basename "$ARIA_CALIB")")
+    [ -f "$ARIA_EXTRINSICS" ] || missing+=("$(basename "$ARIA_EXTRINSICS")")
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "[recon] ego view $EGO_CAM found but trajectory/ lacks ${missing[*]}; ego steps skipped" >&2
+        return 1
+    fi
+    return 0
+}
+
+recon_wait() {
+    # Block until every Slurm job id given has left the queue, then fail if any
+    # of them did not COMPLETE. The one-shot driver (recon_pilot.sh) uses this
+    # between stages whose inputs are not known until the previous stage has
+    # written them -- which clips a take produced, for one.
+    #
+    # Polls squeue rather than using sbatch --wait, so the ids can come from
+    # the stage scripts unchanged. DRYRUN ids return at once.
+    local ids=()
+    for id in "$@"; do
+        case "$id" in ''|DRYRUN) continue ;; esac
+        ids+=("$id")
+    done
+    [ ${#ids[@]} -gt 0 ] || return 0
+    local list; list=$(IFS=,; echo "${ids[*]}")
+    echo "[recon] waiting on job(s) $list" >&2
+    while [ -n "$(squeue -h -j "$list" -o %i 2>/dev/null)" ]; do
+        sleep "${RECON_POLL_SEC:-60}"
+    done
+    local bad=0 st
+    for id in "${ids[@]}"; do
+        st=$(sacct -j "$id" -X -n -o State 2>/dev/null | head -1 | tr -d ' ')
+        echo "[recon] job $id: ${st:-unknown}" >&2
+        case "$st" in COMPLETED) ;; *) bad=1 ;; esac
+    done
+    if [ "$bad" = 1 ]; then
+        echo "[recon] a job did not complete. Its .out file is named after the script" >&2
+        echo "        and job id (sam3-masks-<id>.out, trim-clips-<id>.out, ...)" >&2
+        return 1
+    fi
+    return 0
 }
 
 recon_aux_clip() {
@@ -372,7 +491,9 @@ recon_sbatch() {
         # only the sbatch line would hide everything worth checking.
         for v in VIDEO OUT_DIR WINDOW_JSON EMIT_ROOT CLIPS_JSON \
                  EMIT_MIN_FRAMES EMIT_MAX_CLIPS TRIM_GAP NO_TRIM CHUNK HUMAN OBJECT \
+                 EGO_SEQ EGO_CLIP MESH_BACKEND \
                  OBJECT_SELECT OBJECT_OPEN TRIM_MIN_OBJECT_PX TRIM_MIN_PERSON_PX \
+                 HUMAN_INSTANCES HUMAN2_SEQ \
                  SRC_DIR CAMS SUFFIX START END MIN_FRAMES \
                  MASKS_ROOT PACKED_ROOT HY3D_ROOT NLF_PATH FP_ROOT \
                  HY3D_MESHES_ROOT IDENTIFIER SAVE_NAME OPT_EXTRA \

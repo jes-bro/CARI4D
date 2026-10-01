@@ -86,7 +86,7 @@ def parse_args():
                              "penalise every frame of a pot or a chair")
     parser.add_argument("--views", default=None,
                         help="mask-set names to score, comma separated "
-                             "(default: every cam*-4k set present)")
+                             "(default: every cam*-4k set present, plus the aria*-ego set)")
     parser.add_argument("--min_px", type=int, default=16,
                         help="ignore frames whose object mask is smaller (default: 16)")
     parser.add_argument("--tile", type=int, default=256, help="tile size on the sheet")
@@ -142,10 +142,24 @@ def sharpness(rgb, mask):
 
 
 def aux_views(masks_root, kid):
-    """Return the 4K aux mask-set names present, which are what get scored."""
+    """Return the mask-set names worth scoring: the 4K aux views and the ego clip.
+
+    The ego set (<aria>-ego, from scripts/recon_masks.sh) is included because
+    it is usually the best crop there is -- the wearer's hands put the object
+    a metre from the lens -- and recon_object.sh accepts MESH_CAM=ego for it.
+    """
     suffix = f"_masks_k{kid}.h5"
-    return sorted(f[:-len(suffix)] for f in os.listdir(masks_root)
-                  if f.endswith(suffix) and f.startswith(("cam", "gp")) and "-4k" in f)
+    names = [f[:-len(suffix)] for f in os.listdir(masks_root) if f.endswith(suffix)]
+    return sorted(n for n in names
+                  if (n.startswith(("cam", "gp")) and "-4k" in n)
+                  or (n.startswith("aria") and n.endswith("-ego")))
+
+
+def mesh_cam_for(view):
+    """The MESH_CAM value recon_object.sh wants for a scored mask set."""
+    if view.endswith("-ego"):
+        return "ego"
+    return view.replace("-4k", "")
 
 
 def score_frames(video, masks_root, seq, kid, stride, min_px):
@@ -324,7 +338,7 @@ def build_sheet(masks_root, kid, picks, tile, out_path):
         alpha = (rgba[:, :, 3:4] / 255.0) if rgba.shape[2] == 4 else 1.0
         img = (img * alpha + 128 * (1 - alpha)).astype(np.uint8)
         cv2.rectangle(img, (0, 0), (tile - 1, 22), (0, 0, 0), -1)
-        cv2.putText(img, f"{r['view'].replace('-4k','')} f{r['frame']}  "
+        cv2.putText(img, f"{mesh_cam_for(r['view'])} f{r['frame']}  "
                     f"anom {r['anomaly']:.2f}",
                     (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         tiles.append(img)
@@ -373,7 +387,7 @@ def main():
     views = args.views.split(",") if args.views else aux_views(masks_root, args.kid)
     if not views:
         raise SystemExit(
-            f"ERROR: no cam*-4k or gp*-4k mask sets in {masks_root}. Stage 1b (recon_masks.sh) "
+            f"ERROR: no cam*-4k, gp*-4k or aria*-ego mask sets in {masks_root}. Stage 1b (recon_masks.sh) "
             f"writes them, and the object is reconstructed from a 4K aux view "
             f"because it is ~8x larger there than in the pipeline camera.")
 
@@ -417,7 +431,7 @@ def main():
     print(f"\nsheet: {osp.abspath(out)}")
     best = picks[0]
     print(f"\nLook at the sheet, then reconstruct from the tile you like:")
-    print(f"  MESH_CAM={best['view'].replace('-4k', '')} MESH_FRAME={best['frame']} "
+    print(f"  MESH_CAM={mesh_cam_for(best['view'])} MESH_FRAME={best['frame']} "
           f"TAKE={take_for(work, seq)} SEQ={seq} bash scripts/recon_object.sh")
     return 0
 

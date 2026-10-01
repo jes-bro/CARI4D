@@ -29,12 +29,14 @@ export TAKES_ROOT=/vision/group/egoexo4d/takes
 # export WORK_ROOT=/path/with/room/work
 
 # --- conda envs --------------------------------------------------------------
-# Three, because they need incompatible torch versions. SAM3 needs Python 3.12+
-# and torch 2.7+; hy3d needs Hunyuan3D-2 plus Blender; everything else is the
-# main env.
+# Four, because they need incompatible torch versions. SAM3 needs Python 3.12+
+# and torch 2.7+; hy3d needs Hunyuan3D-2 plus Blender; sam3d-objects is SAM 3D
+# Objects (the default mesh reconstructor, docs/custom_video.md); everything
+# else is the main env.
 export CARI4D_ENV=newcari4d
 export SAM3_ENV=sam3
 export HY3D_ENV=hy3d
+export SAM3D_ENV=sam3d-objects
 
 # --- model weights and caches ------------------------------------------------
 # Caches must NOT sit on a quota'd home directory: these download tens of GB and
@@ -75,7 +77,10 @@ export CHECKPOINT=/simurgh2/projects/ret-hoi/sapiens_ckpts/sapiens_host/pose/che
 # they have to be present. See README/docs and CLAUDE.md:
 #
 #   sam3/                     clone of facebookresearch/sam3, pip install -e
+#   sam-3d-objects/           clone of facebookresearch/sam-3d-objects with
+#                             checkpoints/hf/ downloaded (SAM3D_ROOT to move it)
 #   Hunyuan3D-2/              clone, plus an extracted blender-*/ inside it
+#                             (only for MESH_BACKEND=hy3d, and for orbit renders)
 #   unidepth/                 clone of UniDepth
 #   VolumetricSMPL/           clone, patched with scripts/volumetric_smplh.patch
 #   weights/                  NLF + FoundationPose weights

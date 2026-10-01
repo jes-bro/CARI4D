@@ -126,6 +126,13 @@ def parse_args():
     parser.add_argument("--aria_offset", type=int, default=0,
                         help="index in the full take of the reference view's "
                              "frame 0 (prep/find_trim_offset.py)")
+    parser.add_argument("--aria_masks_offset", type=int, default=0,
+                        help="index in the full take of the ego MASK SET's frame 0. "
+                             "0 when the masks were run over the whole ego video "
+                             "(the basketball runs); the clip's window start when "
+                             "they were run on an ego clip trimmed to the window "
+                             "(scripts/recon_masks.sh), since aria_extrinsics.json "
+                             "is keyed by take frame (default: 0)")
     parser.add_argument("--aria_rotate", type=int, default=90,
                         help="rotation of the stored ego video against its "
                              "calibration (default: 90, what Aria RGB needs)")
@@ -387,7 +394,10 @@ def build_aria_view(args, kid):
     raw, _ = load_object_centroids(args.aria_masks_root, args.aria_name, kid,
                                    args.min_px)
     centroids, cams = {}, {}
-    for take_idx, (u, v, count) in raw.items():
+    for mask_idx, (u, v, count) in raw.items():
+        # The mask set's own numbering starts at 0 whether it covers the whole
+        # ego video or a clip cut from it; the pose table is by take frame.
+        take_idx = mask_idx + args.aria_masks_offset
         if take_idx not in ext:
             continue
         uv = video_to_calib_pixels((u, v), args.aria_size, args.aria_rotate)[0]
