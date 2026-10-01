@@ -28,8 +28,19 @@
 # takes every one. Re-running is safe: a stage whose main output already exists
 # is skipped, so a pilot that died waiting picks up where it was.
 #
+# CLIP_LO / CLIP_HI, in TAKE frames, cut the chosen clip down to that window
+# before the aux views are masked (prep/retrim_clip.py; the new clip is named
+# <clip>t). For a kitchen take where person and pot are in frame throughout,
+# SAM3 emits the whole take as one clip, and masking four 4K views of 5,000
+# frames to reconstruct a 12 s pour is the wrong shape of job.
+#
+# MESH_FROM=<mesh root> drops an already reconstructed object in instead of
+# running the object stage: the <seq>_<frame>_rgba/ directory there is copied
+# into the clip's meshes/ and renamed for the clip. The frame in its name must
+# be a frame of the clip, since the scale step reads depth there.
+#
 # Everything recon_common.sh reads applies here -- PIPE_CAM, EGO=0, MESH_CAM,
-# MESH_FRAME, MESH_BACKEND, EXCLUDE_NODES, DRY_RUN=1 for the plan.
+# MESH_FRAME, MESH_BACKEND, MESH_EXTRA, EXCLUDE_NODES, DRY_RUN=1 for the plan.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -112,6 +123,56 @@ print('\n'.join(c['seq'] for c in json.load(open(sys.argv[1]))['clips']))" "$CLI
 fi
 log "clips: ${clips[*]}  (of ${#all_clips[@]} emitted; CLIPS=$CLIPS)"
 
+# --- 1a': cut the clip(s) to the requested window ------------------------------
+# Take frames in, clip frames to retrim_clip.py, which numbers from the clip's
+# own frame 0. A window outside the clip is an error, not a clamp: the clip
+# would silently be something other than what was asked for.
+if [ -n "${CLIP_LO:-}" ] || [ -n "${CLIP_HI:-}" ]; then
+    : "${CLIP_LO:?set both CLIP_LO and CLIP_HI}" "${CLIP_HI:?set both CLIP_LO and CLIP_HI}"
+    cut=()
+    for clip in "${clips[@]}"; do
+        new="${clip}t"
+        if [ -d "$WORK_ROOT/$new" ] && [ -z "${FORCE:-}" ]; then
+            log "1a' retrim $clip: already done ($new exists)"
+            cut+=("$new"); continue
+        fi
+        if [ -n "$DRY_RUN" ]; then
+            log "1a' retrim $clip -> $new: would cut take frames $CLIP_LO-$CLIP_HI"
+            cut+=("$new"); continue
+        fi
+        read -r lo hi < <(python3 -c "import json,sys; w=json.load(open(sys.argv[1]))['chosen']; print(w['lo'], w['hi'])" "$WORK_ROOT/$clip/window.json")
+        if [ "$CLIP_LO" -lt "$lo" ] || [ "$CLIP_HI" -gt "$hi" ]; then
+            echo "ERROR: window $CLIP_LO-$CLIP_HI is outside clip $clip (take frames $lo-$hi)" >&2
+            exit 1
+        fi
+        log "1a' retrim $clip -> $new: take frames $CLIP_LO-$CLIP_HI (clip frames $((CLIP_LO - lo))-$((CLIP_HI - lo)))"
+        conda run -n "${CARI4D_ENV:-newcari4d}" python prep/retrim_clip.py \
+            --work "$WORK_ROOT/$clip" --lo $((CLIP_LO - lo)) --hi $((CLIP_HI - lo)) --new_seq "$new" >&2
+        cut+=("$new")
+    done
+    clips=("${cut[@]}")
+    log "clips after retrim: ${clips[*]}"
+fi
+
+place_mesh() {
+    # Copy the reconstructed object under $MESH_FROM into this clip's meshes/,
+    # renamed for the clip. The tracker globs <seq>*/*<seq>*_align.obj, so
+    # both the directory and the OBJ carry the clip's name; the .mtl and the
+    # texture keep theirs, which is what the OBJ's mtllib line refers to.
+    local src dst frame
+    for src in "$MESH_FROM"/*_rgba; do
+        [ -d "$src" ] || continue
+        frame=$(basename "$src" | sed -E 's/.*_([0-9]{3})_rgba$/\1/')
+        dst="$MESH_DIR/${SEQ}_${frame}_rgba"
+        if [ -n "$DRY_RUN" ]; then echo "  would copy $src -> $dst" >&2; continue; fi
+        mkdir -p "$MESH_DIR" && cp -r "$src" "$dst"
+        for f in "$dst"/*_align.obj; do
+            [ -f "$f" ] && mv "$f" "$dst/${SEQ}_${frame}_align.obj"
+        done
+        log "placed mesh from $src as $dst"
+    done
+}
+
 # --- 1b: aux + ego masks, every chosen clip at once ---------------------------
 ids=()
 for clip in "${clips[@]}"; do
@@ -140,6 +201,11 @@ for clip in "${clips[@]}"; do
     fi
     if compgen -G "$MESH_DIR/*/*_align.obj" >/dev/null && [ -z "${FORCE:-}" ]; then
         log "2  object $clip: already done"
+        continue
+    fi
+    if [ -n "${MESH_FROM:-}" ]; then
+        log "2  object $clip: taking the mesh from $MESH_FROM"
+        place_mesh
         continue
     fi
     # The picker scores every aux and ego frame and writes the contact sheet;
