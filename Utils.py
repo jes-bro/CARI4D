@@ -99,9 +99,16 @@ def set_logging_format(level=logging.INFO):
 set_logging_format()
 
 
-def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_texture='part', hum_only=False, 
-        meshes_root=None):
-  from pytorch3d.structures import join_meshes_as_scene
+def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_texture='part', hum_only=False,
+        meshes_root=None, obj_color=None):
+  """Load the SMPL part-texture body and the object as one textured scene.
+
+  obj_color, an (r, g, b) in 0-255, replaces the object's texture with that
+  flat colour. A metal pot rendered with its own texture over a kitchen is
+  invisible in the visualization; a magenta one is not. Rendering only --
+  nothing that optimizes against the texture should pass it.
+  """
+  from pytorch3d.structures import join_meshes_as_scene, join_meshes_as_batch
   from pytorch3d.renderer import TexturesUV
   from pytorch3d.io import load_objs_as_meshes
   from pytorch3d.structures import Meshes
@@ -113,21 +120,33 @@ def load_smpl_obj_uvmap(video_prefix, use_hy3d=False, seq_name=None, human_textu
   # meshes_root=None lets get_hy3d_mesh_file read $HY3D_MESHES_ROOT, so a
   # custom sequence's meshes are found without threading a path through every
   # caller between here and the CLI.
-  file_hy3d = get_hy3d_mesh_file(video_prefix, meshes_root=meshes_root) if use_hy3d else None
-  if use_hy3d and file_hy3d is None:
-    raise SystemExit(
-      f'no aligned Hy3D mesh for {video_prefix} under '
-      f'{meshes_root or os.environ.get("HY3D_MESHES_ROOT", "the default root")}. '
-      f'Set HY3D_MESHES_ROOT to the directory holding <seq>*/<seq>*_align.obj, '
-      f'or pass --hy3d_meshes_root.')
-  files = ['data/assets/smpl-meshes/meshlab-corr-order/part_surrel.obj' if human_texture == 'part' else 'assets/smpl-meshes/grey-phosa/smpl_grey_phosa.obj',
-           file_hy3d if use_hy3d else get_render_template_path_from_seq(video_prefix)
-           ]
-  if hum_only:
-    files = files[:1]
+  files = ['data/assets/smpl-meshes/meshlab-corr-order/part_surrel.obj' if human_texture == 'part' else 'assets/smpl-meshes/grey-phosa/smpl_grey_phosa.obj']
+  # hum_only never renders the object, so it must not require one: the
+  # depth-human alignment step (prep/align_monod2hum.py) is human-only and
+  # used to die here on a sequence with no object mesh -- a dance.
+  if not hum_only:
+    file_hy3d = get_hy3d_mesh_file(video_prefix, meshes_root=meshes_root) if use_hy3d else None
+    if use_hy3d and file_hy3d is None:
+      raise SystemExit(
+        f'no aligned Hy3D mesh for {video_prefix} under '
+        f'{meshes_root or os.environ.get("HY3D_MESHES_ROOT", "the default root")}. '
+        f'Set HY3D_MESHES_ROOT to the directory holding <seq>*/<seq>*_align.obj, '
+        f'or pass --hy3d_meshes_root.')
+    files.append(file_hy3d if use_hy3d else get_render_template_path_from_seq(video_prefix))
   
   print('loading templates from', files)
   meshes = load_objs_as_meshes(files, device='cuda')
+
+  if obj_color is not None and not hum_only:
+    obj = meshes[1]
+    maps = obj.textures.maps_padded()
+    flat = torch.tensor(obj_color, dtype=maps.dtype, device=maps.device).view(1, 1, 1, 3) / 255.0
+    recolored = Meshes(verts=obj.verts_list(), faces=obj.faces_list(),
+                       textures=TexturesUV(maps=flat.expand_as(maps).contiguous(),
+                                           faces_uvs=obj.textures.faces_uvs_padded(),
+                                           verts_uvs=obj.textures.verts_uvs_padded()))
+    meshes = join_meshes_as_batch([meshes[0], recolored])
+    print('object rendered in flat colour', tuple(obj_color))
 
   scene = join_meshes_as_scene(meshes)
   tex: TexturesUV = scene.textures

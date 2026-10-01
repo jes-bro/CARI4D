@@ -195,7 +195,9 @@ fi
 # --- J: the render you actually judge it by ---------------------------------
 RESULT_DIR="output/opt/${EXP_NAME:-cari4d-release}+${EXP_STEP:-step031397}${IDENTIFIER}-hy3d3-${SAVE_NAME}"
 export HY3D_MESHES_ROOT="$MESH_DIR-metric"
-job_j=$(recon_sbatch $(recon_dep "$job_i") \
+# VIZ_EXTRA passes flags to tools/viz_pred.py, e.g. "--obj_color 255,0,255"
+# for an object that disappears against the scene in its own texture.
+job_j=$(EXTRA="${VIZ_EXTRA:-}" recon_sbatch $(recon_dep "$job_i") \
     --job-name="s4-$SEQ" \
     scripts/slurm_viz_pred.sh "$RESULT_DIR/$SEQ.pth" "$ALIGNED_CLIP")
 log "J  render                             job $job_j"

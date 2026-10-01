@@ -81,6 +81,10 @@ class PredVisualizer(FPBehaveVideoProcessor):
         parser.add_argument('-ef', '--error_file', type=str, default=None )
         parser.add_argument('--use_sel_view', action='store_true')
         parser.add_argument('--no_sphere', action='store_true')
+        parser.add_argument('--obj_color', type=str, default=None,
+                            help='render the object in this flat colour, "r,g,b" in 0-255, '
+                                 'instead of its texture -- e.g. 255,0,255 for a metal pot '
+                                 'that vanishes against a kitchen')
         parser.add_argument('--filter_oneeuro', action='store_true')
         # Sets $HY3D_MESHES_ROOT, which behave_data.const.get_hy3d_mesh_file
         # reads. A flag as well as the variable because the default is the
@@ -168,7 +172,11 @@ class PredVisualizer(FPBehaveVideoProcessor):
                 if obj_name in self._mesh_cache:
                     return self._mesh_cache[obj_name]
             if combine_smpl:
-                mesh_tensors, meshes = Utils.load_smpl_obj_uvmap(video_prefix, use_hy3d=use_hy3d, human_texture='part')
+                obj_color = None
+                if getattr(self.args, 'obj_color', None):
+                    obj_color = tuple(int(v) for v in self.args.obj_color.split(','))
+                mesh_tensors, meshes = Utils.load_smpl_obj_uvmap(video_prefix, use_hy3d=use_hy3d, human_texture='part',
+                                                                 obj_color=obj_color)
                 verts_list = meshes.verts_list()
                 smpl_n = verts_list[0].shape[0]
                 obj_base = verts_list[1].to('cuda').float()
