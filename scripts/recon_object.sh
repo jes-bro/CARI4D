@@ -139,9 +139,11 @@ export HY3D_ROOT="$MESH_DIR" MASKS_ROOT="$MASKS_DIR"
 # came from another camera: fp_hy3d_track globs the tracking prefix, and
 # estimate_scale_video parses the frame index back out of the filename to fetch
 # depth from the TRACKING video.
+# MESH_EXTRA passes flags through to the reconstruction script, e.g.
+# MESH_EXTRA=--fill_mask_holes for a container seen from above (sam3d only).
 job=$(recon_sbatch --job-name="o1-$SEQ" \
     "$MESH_JOB" "$MESH_CLIP" "$MESH_FRAME" \
-    --out_seq "$SEQ" ${SKIP_HY3D:+$SKIP_FLAG})
+    --out_seq "$SEQ" ${SKIP_HY3D:+$SKIP_FLAG} ${MESH_EXTRA:-})
 log "$MESH_BACKEND object reconstruction     job $job"
 
 MESH_DIR_F="$MESH_DIR/${SEQ}_$(printf '%03d' "$MESH_FRAME")_rgba"

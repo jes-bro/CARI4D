@@ -93,6 +93,13 @@ def parse_args():
                         help="Skip texture baking and colour vertices instead. Faster and "
                              "lighter, but FoundationPose tracks a flat-grey-ish mesh worse "
                              "on objects whose shape alone is ambiguous.")
+    parser.add_argument("--fill_mask_holes", action="store_true",
+                        help="Fill enclosed holes in the object mask before cropping. "
+                             "SAM3 segments a pot seen from above as a ring, leaving the "
+                             "liquid inside unmasked; the model then reads the inside as "
+                             "empty and builds a tube with no bottom. The silhouette a "
+                             "single-image reconstructor needs is the outer contour with "
+                             "everything inside it, which is what this restores.")
     parser.add_argument("--margin", type=float, default=0.2,
                         help="Total border margin ratio for cropping (default: 0.2)")
     parser.add_argument("--crop_size", type=int, default=512,
@@ -111,6 +118,28 @@ def parse_args():
     parser.add_argument("--out_frame_index", type=int, default=None,
                         help="Frame index to encode in the output name instead of --frame_index")
     return parser.parse_args()
+
+
+def fill_mask_holes(mask):
+    """Return the mask with every enclosed hole filled, as uint8 0/255.
+
+    Flood-fills the background from the border of a padded copy; whatever the
+    flood does not reach and the mask does not cover is a hole. Pure cv2, so
+    it needs nothing the reconstruction env lacks.
+    """
+    import cv2
+
+    fg = (mask > 127).astype(np.uint8)
+    padded = np.pad(fg, 1)
+    flood = padded.copy()
+    h, w = flood.shape
+    cv2.floodFill(flood, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    holes = (flood == 0) & (padded == 0)
+    filled = (padded | holes.astype(np.uint8))[1:-1, 1:-1]
+    n_holes = int(holes.sum())
+    print(f"Filled {n_holes} enclosed hole px in the object mask "
+          f"({int(fg.sum())} -> {int(filled.sum())} px)")
+    return filled * 255
 
 
 def load_sam3d(sam3d_root, tag):
@@ -297,6 +326,8 @@ def main():
         print(f"Loading object mask from {args.masks_root}")
         mask = load_object_mask(args.masks_root, seq_name, frame_idx, args.kid)
 
+    if args.fill_mask_holes:
+        mask = fill_mask_holes(mask)
     rgba_img = crop_rgba(rgb, mask, margin=args.margin, crop_size=args.crop_size)
     rgba_img.save(rgba_path)
     print(f"Saved RGBA: {rgba_path}")
