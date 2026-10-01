@@ -116,6 +116,46 @@ python prep/run_hy3d_recon.py \
 - Use `--skip_glb2obj` to skip the Blender conversion step (e.g. if you want to inspect the GLB first).
 - The script skips processing if the output OBJ already exists.
 
+### Alternative: `run_sam3d_recon.py` (SAM 3D Objects)
+
+`prep/run_sam3d_recon.py` takes the same arguments and writes the same layout, with
+[SAM 3D Objects](https://github.com/facebookresearch/sam-3d-objects) as the reconstructor.
+It is the better choice for objects seen from one side in clutter (a pot on a stove, a pan
+in a hand): Hunyuan3D invents the far side, SAM 3D was trained on occluded real photographs.
+It also keeps the predicted camera-frame pose beside the mesh as `<name>_sam3d_pose.npz`.
+
+**Setup** (its own env; needs a GPU with 32 GB or more):
+
+```bash
+git clone https://github.com/facebookresearch/sam-3d-objects && cd sam-3d-objects
+conda env create -f environments/default.yml && conda activate sam3d-objects
+export PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
+pip install -e '.[dev]' && pip install -e '.[p3d]'
+export PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+pip install -e '.[inference]' && ./patching/hydra
+pip install 'huggingface-hub[cli]<1.0' h5py opencv-python
+hf download --repo-type model --local-dir checkpoints/hf-download --max-workers 1 facebook/sam-3d-objects
+mv checkpoints/hf-download/checkpoints checkpoints/hf && rm -rf checkpoints/hf-download
+```
+
+Build the env on a GPU node, or PyTorch3D compiles without CUDA. The checkpoints are gated:
+accept the license on HuggingFace and `hf auth login` first.
+
+**Example:**
+
+```bash
+python prep/run_sam3d_recon.py \
+    --video data/cari4d-demo/wild/videos/Date03_Sub01_gas_wild002.0.color.mp4 \
+    --masks_root data/cari4d-demo/wild/masks \
+    --hy3d_root data/cari4d-demo/meshes-sam3d \
+    --sam3d_root sam-3d-objects \
+    --blender_path /path/to/blender      # or --no_blender to write the OBJ with trimesh
+```
+
+On the cluster, `scripts/slurm_sam3d_recon.sh` is the drop-in for `slurm_hy3d_recon.sh`.
+`--skip_sam3d` writes only the RGBA crop. The mesh is renormalised to the Hunyuan3D
+convention (longest axis in `[-1, 1]`) so `tools/estimate_scale_video.py` sees no difference.
+
 ---
 
 ## Step 3: 2D Human Keypoints
