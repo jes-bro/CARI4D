@@ -131,13 +131,17 @@ print(f'  metric mesh {sys.argv[1]}: extents {m.extents} m, largest {max(m.exten
 # No --reinit_every: a pot's orientation is observable, and re-registering
 # every frame would spin it. The hands stand in for the person in the depth
 # band test, which is what the ego masks' person channel holds.
-log "5 foundationpose on the ego clip"
-python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
-    --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
-    --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
-    --erode_depth_thres "$EGO_ERODE" \
-    --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K"
 ego_pkl="$EGO_FP_DIR/${EGO_PIPE_SEQ}_all.pkl"
+if [ -f "$ego_pkl" ] && [ -z "${FORCE_FP:-}" ]; then
+    log "5 foundationpose: already done ($ego_pkl); FORCE_FP=1 to redo"
+else
+    log "5 foundationpose on the ego clip"
+    python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
+        --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
+        --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
+        --erode_depth_thres "$EGO_ERODE" \
+        --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K"
+fi
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 
 # --- 6: into the pipeline camera ----------------------------------------------------
@@ -168,7 +172,25 @@ for d in "$EGO_MESH_DIR-metric"/*; do
         done
     fi
 done
-log "metric mesh for the pipeline: $(ls "$MESH_DIR-metric"/*/*_align.obj 2>/dev/null | head -1)"
+pipe_metric_obj=$(ls "$MESH_DIR-metric"/*/*_align.obj 2>/dev/null | head -1)
+log "metric mesh for the pipeline: $pipe_metric_obj"
+
+# --- 7: the pipeline camera's object masks, from the ego track ------------------
+# Until here cam01's own SAM3 object mask still spoke for the object in three
+# places: the depth injection writes into it, CoCoNet reads it, the optimizer
+# pulls the mesh toward it. On a mask that sits on the wrong thing, all three
+# drag a correct ego pose onto the wrong thing. So it is replaced by the
+# silhouette of the tracked mesh in this camera. The exo copy is kept as
+# <name>.exo.h5. The person masks are untouched.
+: "${RECT_DIR:?set RECT_DIR}"
+rect_masks="$RECT_DIR/${SEQ}_masks_k0.h5"
+rect_pkl="$RECT_DIR/$SEQ.0.color.pkl"
+for required in "$rect_masks" "$rect_pkl"; do
+    [ -e "$required" ] || { echo "ERROR: stage 2 output missing: $required" >&2; exit 1; }
+done
+log "7 object masks in $PIPE_CAM from the ego track"
+python prep/render_object_masks.py --fp_pkl "$FP_DIR/${SEQ}_all.pkl" --mesh "$pipe_metric_obj" \
+    --camera_pkl "$rect_pkl" --masks_h5 "$rect_masks"
 
 log "done. outputs:"
 ls -la "$EGO_RECT_DIR" "$EGO_FP_DIR" "$FP_DIR" "$(dirname "$OBJECT_XYZ_EGO")"
