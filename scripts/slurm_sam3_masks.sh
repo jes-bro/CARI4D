@@ -79,12 +79,12 @@ fi
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${SAM3_ENV:-sam3}"
 
-echo "[sam3] host=$(hostname) job=${SLURM_JOB_ID:-<none>} gpu=$CUDA_VISIBLE_DEVICES"
+echo "[sam3] host=$(hostname) job=${SLURM_JOB_ID:-<none>} gpu=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "[sam3] repo=$REPO"
 echo "[sam3] video=$VIDEO"
 echo "[sam3] out_dir=$OUT_DIR  window_json=${WINDOW_JSON:-<none>}"
 echo "[sam3] emit_root=${EMIT_ROOT:-<none>}  clips_json=${CLIPS_JSON:-<none>}"
-echo "[sam3] human='$HUMAN' object='$OBJECT'  HF_HOME=$HF_HOME"
+echo "[sam3] human='$HUMAN' object='${OBJECT:-<none>}' people=${HUMAN_INSTANCES:-1}${HUMAN2_SEQ:+ second=$HUMAN2_SEQ}  HF_HOME=$HF_HOME"
 echo "[sam3] chunk=${CHUNK:-300} trim=$([ -n "${NO_TRIM:-}" ] && echo off || echo on)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
@@ -95,10 +95,16 @@ cd "$REPO"
 # ${NO_TRIM:+--no_trim} is unquoted on purpose -- it expands to nothing when
 # NO_TRIM is unset, and quoting it would pass an empty argument argparse rejects.
 # The :+ form is safe under `set -u`.
+# OBJECT may be empty (a dance has no object): then the flag is omitted and
+# run_sam3_masks.py writes empty object masks and trims on the people alone.
+# HUMAN_INSTANCES=2 tracks two people; HUMAN2_SEQ names the second one's masks
+# (unset: <seq>_p2, which is right for the aux views).
 python -u "$REPO/prep/run_sam3_masks.py" \
     --video "$VIDEO" \
     --human_prompt "$HUMAN" \
-    --object_prompt "$OBJECT" \
+    ${OBJECT:+--object_prompt "$OBJECT"} \
+    ${HUMAN_INSTANCES:+--human_instances "$HUMAN_INSTANCES"} \
+    ${HUMAN2_SEQ:+--human2_seq "$HUMAN2_SEQ"} \
     --output_dir "$OUT_DIR" \
     --chunk_size "${CHUNK:-300}" \
     ${NO_TRIM:+--no_trim} \

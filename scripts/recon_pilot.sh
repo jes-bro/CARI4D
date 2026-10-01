@@ -8,6 +8,12 @@
 #
 #   tail -f pilot-mpot.log        # or: cat work/<seq>/NEXT.txt when it is done
 #
+# Or, inside an interactive GPU allocation while a new kind of take is still
+# being debugged, with every job running in this terminal instead of the queue
+# (scripts/recon_local.sh):
+#
+#   RECON_BACKEND=local TAKE=... SEQ=... bash scripts/recon_pilot.sh 2>&1 | tee pilot.log
+#
 # What it runs, in order, and why it waits where it waits:
 #
 #   0  recon_check.sh      the inputs exist (seconds, no job)
@@ -71,15 +77,20 @@ run_stage() {
     # submitted (appending to whatever is there).
     #
     # The stages log "<what>   job <id>" on stderr; those ids are what the
-    # wait needs. Output is captured and re-echoed rather than piped so the
-    # stage's exit status survives -- a stage that refuses to run (missing
-    # input, basketball prompts on a kitchen) stops the pilot right here.
-    local out
-    out=$(bash "scripts/recon_$1.sh" 2>&1) || { echo "$out" >&2; return 1; }
-    echo "$out" >&2
-    [ -n "$DRY_RUN" ] || echo "$out" >> "$PILOT_LOG"
+    # wait needs. Output streams through tee as it happens -- under the local
+    # backend the jobs themselves run inside the stage, and watching them is
+    # the point -- and is parsed from the copy afterwards. The stage's exit
+    # status is kept through the pipe, so a stage that refuses to run
+    # (missing input, basketball prompts on a kitchen) stops the pilot here.
+    local tmp rc
+    tmp=$(mktemp)
+    bash "scripts/recon_$1.sh" 2>&1 | tee "$tmp" >&2
+    rc=${PIPESTATUS[0]}
+    [ -n "$DRY_RUN" ] || cat "$tmp" >> "$PILOT_LOG"
     local id
-    while read -r id; do ids+=("$id"); done < <(echo "$out" | grep -oE ' job [A-Z0-9]+$' | awk '{print $2}')
+    while read -r id; do ids+=("$id"); done < <(grep -oE ' job [A-Z0-9]+$' "$tmp" | awk '{print $2}')
+    rm -f "$tmp"
+    return "$rc"
 }
 
 # --- 0: inputs -----------------------------------------------------------------

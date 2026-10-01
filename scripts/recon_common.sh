@@ -419,7 +419,8 @@ recon_wait() {
     # the stage scripts unchanged. DRYRUN ids return at once.
     local ids=()
     for id in "$@"; do
-        case "$id" in ''|DRYRUN) continue ;; esac
+        # LOCAL jobs ran to completion in the foreground before returning.
+        case "$id" in ''|DRYRUN|LOCAL) continue ;; esac
         ids+=("$id")
     done
     [ ${#ids[@]} -gt 0 ] || return 0
@@ -520,8 +521,9 @@ recon_dep() {
     # were given, so the caller can always interpolate it unquoted.
     local ids=""
     for id in "$@"; do
-        [ "$id" = "DRYRUN" ] && continue
-        [ -z "$id" ] && continue
+        # Fake ids: DRYRUN from a dry run, LOCAL from recon_local.sh, where
+        # the job already finished before this line ran.
+        case "$id" in ''|DRYRUN|LOCAL) continue ;; esac
         ids="${ids:+$ids:}$id"
     done
     [ -n "$ids" ] && echo "--dependency=afterok:$ids"
