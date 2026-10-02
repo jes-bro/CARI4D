@@ -91,6 +91,21 @@ def get_intrinsics_unified(data_source, seq_name, kid, wild_video=False):
     return intrinsics
 
 
+def upright_intrinsics(K, turns, H, W):
+    """Intrinsics of an (H, W) image after np.rot90(image, -turns), i.e. turned clockwise.
+
+    One clockwise quarter turn sends pixel (u, v) to (H - 1 - v, u), so the
+    focal lengths swap and the principal point moves with the pixels. Depth
+    along the optical axis is the same in both images, which is why a depth
+    map predicted upright can simply be turned back.
+    """
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    for _ in range(turns % 4):
+        fx, fy, cx, cy = fy, fx, H - 1 - cy, cx
+        H, W = W, H
+    return np.array([[fx, 0, cx], [0., fy, cy], [0, 0., 1]])
+
+
 class UniDepthBehaveProcessor(BaseBehaveVideoData):
     def init_camera_K(self):
         if self.wild_video:
@@ -121,6 +136,7 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
             video_iter = ctrl.video_iter
             focals = []
             pkl_provided = False
+            stored_rot = None
             if args.data_source == 'behave':
                 fx, fy, cx, cy = get_intrinsics(kid)
                 if not args.wild_video:
@@ -142,6 +158,8 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
                                                [0., 0., 1.]])
                         print('using provided intrinsics from',
                               ctrl.video_path.replace('.mp4', '.pkl'))
+                        if 'rotate' in d:
+                            stored_rot = int(d['rotate'])
 
             elif args.data_source == 'hodome':
                 from behave_data.const import get_camera_K_hodome, HODOME_VIEW_IDS
@@ -166,12 +184,30 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
             else:
                 raise ValueError(f'Invalid data source: {args.data_source}')
             print("camera intrinsics:", intrinsics)
+            # --upright: the rectified Aria clip is in the calibration's
+            # orientation, a quarter turn from upright (prep/rectify_aria.py),
+            # and a monocular depth model has only ever seen upright scenes:
+            # floors below, walls standing. So each frame is turned upright
+            # for the model and its depth map turned back, and everything
+            # downstream reads a depth video in the clip's own orientation,
+            # exactly as before.
+            turns = 0
+            if getattr(args, 'upright', False):
+                if stored_rot is None:
+                    raise ValueError('--upright needs a camera .pkl beside the video that records '
+                                     '"rotate" (prep/rectify_aria.py writes one)')
+                turns = (stored_rot // 90) % 4
+                print(f'--upright: frames turned {90 * turns} deg clockwise for the model, depth turned back')
             try:
                 for fidx, img in enumerate(tqdm(video_iter)):
                     image = np.array(img)
+                    model_K = intrinsics
+                    if turns:
+                        model_K = upright_intrinsics(intrinsics, turns, *image.shape[:2])
+                        image = np.ascontiguousarray(np.rot90(image, -turns))
                     rgb = torch.from_numpy(image).permute(2, 0, 1)  # C, H, W
                     # prepare intrinsics based on data source
-                    camera = Pinhole(K=torch.from_numpy(intrinsics)) if intrinsics is not None else None
+                    camera = Pinhole(K=torch.from_numpy(model_K)) if model_K is not None else None
                     prediction = model.infer(rgb, camera)
                     depth = prediction["depth"][0, 0] # return B, 1, H, W  # Depth in [m].
                     focals.append(prediction['intrinsics'][0, 0, 0].cpu().numpy()) # (B, 3, 3)
@@ -181,12 +217,14 @@ class UniDepthBehaveProcessor(BaseBehaveVideoData):
                         print("Intrinsics updated!", intrinsics)
                     dmap = depth.cpu().numpy()  # (H, W), meter
                     dmap = (dmap * 1000).astype(np.uint16)
+                    if turns:
+                        dmap = np.ascontiguousarray(np.rot90(dmap, turns))
                     if depth_writer is None:
-                        H, W = image.shape[:2]  # dynamic size
+                        H, W = dmap.shape[:2]  # dynamic size
                         print('using image reso:', H, W)
                         depth_writer = Uint16Writer(outfile, (W, H), fps=args.fps)
                     depth_writer.write(dmap)
-                        
+
             except StopIteration:
                 # video done, save dmap
                 depth_writer.close()
@@ -282,6 +320,9 @@ if __name__ == '__main__':
     ctx = mp.get_context('spawn')
 
     parser = BaseBehaveVideoData.get_parser()
+    parser.add_argument('--upright', action='store_true',
+                        help='turn each frame upright for the model, by the rotation the camera '
+                             '.pkl records (prep/rectify_aria.py), and turn the depth back')
 
     args = parser.parse_args()
 

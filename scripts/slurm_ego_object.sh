@@ -44,6 +44,10 @@
 #   EGO_DEPTH_ANCHOR    size (default with EGO_OBJECT_SIZE) | sfm | none; sfm
 #                       scales the depth per frame from the Aria trajectory
 #                       and needs no object size (prep/estimate_depth_scale_sfm.py)
+#   EGO_UPRIGHT (1)     UniDepth sees each ego frame turned upright and its depth
+#                       is turned back; the rectified clip is a quarter turn
+#                       from upright, which a monocular depth model has never
+#                       seen. 0 feeds it the frame as rectified
 #   EGO_RGB_ONLY=1      FoundationPose refines on appearance only; the depth
 #                       map seeds the first frame and is otherwise ignored.
 #                       For when the pot lands a constant distance too far
@@ -96,10 +100,11 @@ RECT_CLIP="$EGO_RECT_DIR/$EGO_PIPE_SEQ.0.color.mp4"
 # --- previous outputs out of the way -------------------------------------------
 # Half the bugs chased on the first take were steps quietly reusing an older
 # output. So every product of this job -- the ego track, the carried-over
-# poses, the metric meshes, the depth factor -- is MOVED into a dated folder
-# before the run, and the log names it. The rectified clip, its masks and its
-# depth map stay: they depend only on stage 1b's inputs. FORCE_ALL=1 moves
-# those too.
+# poses, the metric meshes, the depth map, the depth factor -- is MOVED into a
+# dated folder before the run, and the log names it. The rectified clip and
+# its masks stay: they depend only on stage 1b's inputs. FORCE_ALL=1 moves
+# those too. The depth map does not stay: unidepth_behave.py returns early on
+# an existing one, and it now depends on EGO_UPRIGHT.
 PREVIOUS_DIR="${PREVIOUS_DIR:-$WORK/previous/$(date +%Y%m%d-%H%M%S)}"
 archive() {
     # Move $1 into $PREVIOUS_DIR if it exists; say so.
@@ -116,6 +121,7 @@ archive "$EGO_MESH_DIR-metric"
 archive "$EGO_MESH_DIR"
 archive "$MESH_DIR-metric"
 archive "$EGO_RECT_DIR/depth_scale.npz"
+archive "$EGO_RECT_DIR/$EGO_PIPE_SEQ.0.depth-reg.mp4"
 if [ -n "${FORCE_ALL:-}" ]; then
     archive "$EGO_RECT_DIR"
 fi
@@ -130,8 +136,11 @@ else
 fi
 
 # --- 2: depth ----------------------------------------------------------------------
-log "2 unidepth on the rectified ego clip"
-python prep/unidepth_behave.py --wild_video --video "$RECT_CLIP" -o "$EGO_RECT_DIR"
+EGO_UPRIGHT="${EGO_UPRIGHT:-1}"
+UPRIGHT_FLAG="--upright"
+if [ "$EGO_UPRIGHT" = 0 ]; then UPRIGHT_FLAG=""; fi
+log "2 unidepth on the rectified ego clip (upright=$EGO_UPRIGHT)"
+python prep/unidepth_behave.py --wild_video --video "$RECT_CLIP" -o "$EGO_RECT_DIR" $UPRIGHT_FLAG
 
 # --- 3: the mesh, under the ego sequence's name ----------------------------------
 # The reconstructed object sits in $MESH_DIR named for the pipeline sequence.
