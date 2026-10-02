@@ -154,6 +154,19 @@ nlf_root=${nlf_path}-opt \
 video=${video}  cam_id=0 wild_video=True \
 outpath=${coconet_out}
 
+# The optimizer RESUMES from its own previous result: opt_refineout.py globs
+# <exp_dir>/<seq>*.pth, loads the last one, and when its step count has
+# reached num_steps prints "skipping" and returns. So a finished result from
+# an earlier run is handed back unchanged by every later run, whatever CoCoNet
+# fed in. Same reasoning as for the CoCoNet file above: this job exists to
+# redo the solve, so the old result goes first. KEEP_OPT=1 keeps the resume
+# behaviour, for continuing an optimisation that was cut short.
+opt_dir="output/opt/${exp_name}+${exp_step}${identifier}-hy3d3-${save_name}"
+if [ -z "${KEEP_OPT:-}" ] && compgen -G "${opt_dir}/${video_prefix}*.pth" >/dev/null; then
+    log "removing previous optimizer result(s) under $opt_dir for $video_prefix so step 7 starts from CoCoNet"
+    rm -f "${opt_dir}/${video_prefix}"*.pth
+fi
+
 # Step 7: joint optimisation (demo-custom.sh's, with save_name and a trailing
 # override slot). OmegaConf's CLI is last-key-wins, so ${opt_extra} unquoted at
 # the end overrides any weight above it.
