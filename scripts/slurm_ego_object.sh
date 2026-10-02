@@ -187,6 +187,11 @@ python prep/ego_poses_to_cam.py --fp_pkl "$ego_pkl" --calib "$CALIB" --cam "$PIP
 
 # The metric mesh for the pipeline stages, renamed for the pipeline sequence.
 # Everything the scale step wrote is carried over, including debug outputs.
+# The directory is cleared first: a mesh left there by an earlier run under
+# another name sorts ahead of this one, and every reader takes the first
+# match -- which is how cam01 rendered a mesh a thirtieth of the pot's size
+# while the ego track itself was right.
+rm -rf "$MESH_DIR-metric"
 mkdir -p "$MESH_DIR-metric"
 for d in "$EGO_MESH_DIR-metric"/*; do
     [ -e "$d" ] || continue
