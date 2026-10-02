@@ -332,7 +332,9 @@ class FoundationPose:
     return best_pose.data.cpu().numpy()
 
 
-  def track_one(self, rgb, depth, K, iteration, extra={}):
+  def track_one(self, rgb, depth, K, iteration, extra={}, rgb_only=False):
+    """One tracking step from pose_last. rgb_only: refine on appearance alone,
+    ignoring the depth channel, for a depth map whose scale is not trusted."""
     if self.pose_last is None:
       logging.info("Please init pose by register first")
       raise RuntimeError
@@ -347,7 +349,7 @@ class FoundationPose:
     pose, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K,
                                      ob_in_cams=self.pose_last.reshape(1,4,4).data.cpu().numpy(), normal_map=None,
                                      xyz_map=xyz_map, mesh_diameter=self.diameter, glctx=self.glctx, iteration=iteration,
-                                     get_vis=self.debug>=2)
+                                     get_vis=self.debug>=2, rgb_only=rgb_only)
     if self.debug>=2:
       extra['vis'] = vis
     self.pose_last = pose

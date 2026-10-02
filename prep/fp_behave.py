@@ -281,7 +281,7 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                                             iteration=5,
                                             vis_score_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_score.png'),
                                             vis_refine_path=output_path.replace('.pkl', f'_{t:06f}_k{k}_refine.png'),
-                                            rgb_only=False, both_depth_and_rgb=False
+                                            rgb_only=bool(getattr(args, 'rgb_only', False)), both_depth_and_rgb=False
                                             )
                     except TypeError:
                         # register() found fewer than 4 depth pixels inside the mask
@@ -307,7 +307,8 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                         is_first_frame = False
                 else:
                     # run tracking mode
-                    pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5)
+                    pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5,
+                                         rgb_only=bool(getattr(args, 'rgb_only', False)))
                 if frame_time not in pose_hist_dict:
                     pose_hist_dict[frame_time] = []
                 if frame_time not in pose_dict:
@@ -512,6 +513,12 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                                  "consumes a small object entirely if its depth is an "
                                  "isolated island. 0 restores the previous behaviour "
                                  "(default: 4)")
+        parser.add_argument("--rgb_only", action="store_true",
+                            help="refine and score poses on appearance and silhouette only, "
+                                 "ignoring the depth channel. The initial translation still "
+                                 "comes from the depth inside the mask. For a monocular depth "
+                                 "whose scale is not trusted: the object's distance then comes "
+                                 "from its apparent size against the (metric) mesh")
         parser.add_argument("--zfar", default=8.0, type=float,
                             help="depth beyond this many metres is discarded. The 8m "
                                  "default matches BEHAVE's indoor capture volume; raise "

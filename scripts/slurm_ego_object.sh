@@ -41,6 +41,11 @@
 #                       replaces the depth fit (a saucepan with handle: ~0.35)
 #                       and anchors the depth map's scale to the object
 #   EGO_DEPTH_SCALE     that depth factor typed by hand, instead of measured
+#   EGO_RGB_ONLY=1      FoundationPose refines on appearance only; the depth
+#                       map seeds the first frame and is otherwise ignored.
+#                       For when the pot lands a constant distance too far
+#                       along the ego's line of sight: the depth was wrong
+#                       and the refiner followed it
 
 set -euo pipefail
 
@@ -173,7 +178,8 @@ else
         --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
         --erode_depth_thres "$EGO_ERODE" --depth_scale "$DEPTH_SCALE" \
-        --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K"
+        --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K" \
+        ${EGO_RGB_ONLY:+--rgb_only}
 fi
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 
