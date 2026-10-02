@@ -129,6 +129,11 @@ if [ -z "$DRY_RUN" ]; then
 fi
 
 log "take=$TAKE  seq=$SEQ  work=$WORK  object from: $OBJECT_FROM"
+# One dated folder per solve run that every job moves its previous outputs
+# into (ego track, carried poses, metric meshes, CoCoNet and optimizer
+# results), so no step can hand back an older run's answer.
+export PREVIOUS_DIR="$WORK/previous/$(date +%Y%m%d-%H%M%S)"
+log "previous outputs of this clip go to $PREVIOUS_DIR"
 log "fp: tstart=$TSTART zfar=$ZFAR erode=$ERODE_DEPTH_THRES reinit=$REINIT_EVERY band=$DEPTH_HUMAN_BAND mad_k=$DEPTH_MAD_K"
 log "opt: identifier=$IDENTIFIER save_name=$SAVE_NAME extra='$OPT_EXTRA'"
 

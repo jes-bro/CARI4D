@@ -140,11 +140,21 @@ fi
 # CoCoNet result is never what is wanted here: it handed the optimizer the
 # previous run's object track -- the exo one -- on every ego rerun. Removed
 # first, with a line in the log saying so.
+# Moved into PREVIOUS_DIR when the driver set one, deleted otherwise.
+stash_previous() {
+    # Move $1 into $PREVIOUS_DIR, or remove it; either way it will not be reused.
+    [ -e "$1" ] || return 0
+    if [ -n "${PREVIOUS_DIR:-}" ]; then
+        mkdir -p "$PREVIOUS_DIR"
+        mv "$1" "$PREVIOUS_DIR/$(basename "$(dirname "$1")")__$(basename "$1")"
+        log "moved previous $1 -> $PREVIOUS_DIR/"
+    else
+        rm -f "$1"
+        log "removed previous $1"
+    fi
+}
 coconet_pth="${coconet_out}/${exp_name}+${exp_step}${identifier}/${video_prefix}.pth"
-if [ -f "$coconet_pth" ]; then
-    log "removing cached CoCoNet result $coconet_pth so step 6 recomputes it"
-    rm -f "$coconet_pth"
-fi
+stash_previous "$coconet_pth"
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
 use_sel_view=True render_video=True identifier=${identifier} use_intermediate=False data_name=test-only \
 hy3d_meshes_root=${hy3d_root}-metric \
@@ -162,9 +172,10 @@ outpath=${coconet_out}
 # redo the solve, so the old result goes first. KEEP_OPT=1 keeps the resume
 # behaviour, for continuing an optimisation that was cut short.
 opt_dir="output/opt/${exp_name}+${exp_step}${identifier}-hy3d3-${save_name}"
-if [ -z "${KEEP_OPT:-}" ] && compgen -G "${opt_dir}/${video_prefix}*.pth" >/dev/null; then
-    log "removing previous optimizer result(s) under $opt_dir for $video_prefix so step 7 starts from CoCoNet"
-    rm -f "${opt_dir}/${video_prefix}"*.pth
+if [ -z "${KEEP_OPT:-}" ]; then
+    for f in "${opt_dir}/${video_prefix}"*.pth; do
+        [ -e "$f" ] && stash_previous "$f"
+    done
 fi
 
 # Step 7: joint optimisation (demo-custom.sh's, with save_name and a trailing

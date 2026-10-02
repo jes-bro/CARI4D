@@ -93,6 +93,33 @@ python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available';
 
 RECT_CLIP="$EGO_RECT_DIR/$EGO_PIPE_SEQ.0.color.mp4"
 
+# --- previous outputs out of the way -------------------------------------------
+# Half the bugs chased on the first take were steps quietly reusing an older
+# output. So every product of this job -- the ego track, the carried-over
+# poses, the metric meshes, the depth factor -- is MOVED into a dated folder
+# before the run, and the log names it. The rectified clip, its masks and its
+# depth map stay: they depend only on stage 1b's inputs. FORCE_ALL=1 moves
+# those too.
+PREVIOUS_DIR="${PREVIOUS_DIR:-$WORK/previous/$(date +%Y%m%d-%H%M%S)}"
+archive() {
+    # Move $1 into $PREVIOUS_DIR if it exists; say so.
+    [ -e "$1" ] || return 0
+    mkdir -p "$PREVIOUS_DIR"
+    mv "$1" "$PREVIOUS_DIR/$(basename "$1")"
+    log "   moved $1 -> $PREVIOUS_DIR/"
+}
+log "previous outputs go to $PREVIOUS_DIR"
+archive "$EGO_FP_DIR"
+archive "$FP_DIR/${SEQ}_all.pkl"
+archive "$OBJECT_XYZ_EGO"
+archive "$EGO_MESH_DIR-metric"
+archive "$EGO_MESH_DIR"
+archive "$MESH_DIR-metric"
+archive "$EGO_RECT_DIR/depth_scale.npz"
+if [ -n "${FORCE_ALL:-}" ]; then
+    archive "$EGO_RECT_DIR"
+fi
+
 # --- 1: pinhole ------------------------------------------------------------------
 if [ -f "$RECT_CLIP" ] && [ -f "$EGO_RECT_DIR/${EGO_PIPE_SEQ}_masks_k0.h5" ]; then
     log "1 rectify: already done ($RECT_CLIP)"
@@ -193,11 +220,8 @@ esac
 # every frame would spin it. The hands stand in for the person in the depth
 # band test, which is what the ego masks' person channel holds.
 ego_pkl="$EGO_FP_DIR/${EGO_PIPE_SEQ}_all.pkl"
-# A stated size changes the mesh the poses were fitted with, so the track is
-# redone then as well; a cached one would carry the old scale's translations.
-if [ -f "$ego_pkl" ] && [ -z "${FORCE_FP:-}" ] && [ -z "${EGO_OBJECT_SIZE:-}" ]; then
-    log "5 foundationpose: already done ($ego_pkl); FORCE_FP=1 to redo"
-else
+# Always recomputed: the previous track was moved aside above.
+{
     log "5 foundationpose on the ego clip"
     # --redo: the tracker otherwise exits on an existing per-camera pickle
     # ("Already exists ..._all_k0.pkl, all done") and every change to the mesh,
@@ -209,7 +233,7 @@ else
         --erode_depth_thres "$EGO_ERODE" "${DEPTH_SCALE_ARGS[@]}" \
         --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K" \
         ${EGO_RGB_ONLY:+--rgb_only}
-fi
+}
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 
 # --- 6: into the pipeline camera ----------------------------------------------------
@@ -221,11 +245,10 @@ python prep/ego_poses_to_cam.py --fp_pkl "$ego_pkl" --calib "$CALIB" --cam "$PIP
 
 # The metric mesh for the pipeline stages, renamed for the pipeline sequence.
 # Everything the scale step wrote is carried over, including debug outputs.
-# The directory is cleared first: a mesh left there by an earlier run under
-# another name sorts ahead of this one, and every reader takes the first
-# match -- which is how cam01 rendered a mesh a thirtieth of the pot's size
-# while the ego track itself was right.
-rm -rf "$MESH_DIR-metric"
+# The directory was moved aside at the top: a mesh left there by an earlier
+# run under another name sorts ahead of this one, and every reader takes the
+# first match -- which is how cam01 once rendered a mesh a thirtieth of the
+# pot's size while the ego track itself was right.
 mkdir -p "$MESH_DIR-metric"
 for d in "$EGO_MESH_DIR-metric"/*; do
     [ -e "$d" ] || continue

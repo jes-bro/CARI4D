@@ -169,8 +169,11 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
         "init once and then run tracking mode"
         args = self.args
         output_path = self.output_path.replace('.pkl', f'_k{kid_to_run}.pkl')
-        if osp.isfile(output_path):
-            print('Already exists {}, all done'.format(output_path))
+        # Honours --redo, which the chunked path always did and this one did
+        # not: every rerun with a changed mesh, depth scale or refinement mode
+        # was returning the first run's track from here.
+        if osp.isfile(output_path) and not getattr(args, 'redo', False):
+            print('Already exists {}, all done (pass --redo to recompute)'.format(output_path))
             return
         if est is None:
             est, glctx, mesh, refiner = self.init_pose_estimator(debug=0)
