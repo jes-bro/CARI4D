@@ -34,11 +34,25 @@ class BehaveHy3DTrackFPRunner(FPBehaveVideoProcessor):
         return mesh_file
 
     def process_depth(self, depth):
-        "input and output depth should be float"
-        return depth
+        """Depth in metres, in; depth in metres, out, times --depth_scale.
+
+        Monocular depth has a free global scale, and FoundationPose seeds and
+        refines its translation from it: a depth map twice too far puts the
+        object twice too far. prep/estimate_depth_scale.py measures that
+        factor from the object's known size; this is where it is applied,
+        after the mm->m conversion and before the zfar clip.
+        """
+        scale = float(getattr(self.args, 'depth_scale', 1.0) or 1.0)
+        if scale != 1.0 and not getattr(self, '_depth_scale_said', False):
+            print(f'scaling depth by {scale:.4f}')
+            self._depth_scale_said = True
+        return depth * scale
 
 if __name__ == '__main__':
     parser = BehaveHy3DTrackFPRunner.get_parser()
+    parser.add_argument('--depth_scale', type=float, default=1.0,
+                        help='multiply the depth map by this before use; the factor from '
+                             'prep/estimate_depth_scale.py for a monocular depth of unknown scale')
     args = parser.parse_args()
 
     if osp.isfile(args.video):

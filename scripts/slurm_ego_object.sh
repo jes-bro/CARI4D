@@ -39,6 +39,8 @@
 #   EGO_BAND   (1.0)    object-to-hands depth band, metres
 #   EGO_OBJECT_SIZE     the object's longest dimension in metres, when known;
 #                       replaces the depth fit (a saucepan with handle: ~0.35)
+#                       and anchors the depth map's scale to the object
+#   EGO_DEPTH_SCALE     that depth factor typed by hand, instead of measured
 
 set -euo pipefail
 
@@ -139,6 +141,19 @@ m = trimesh.load(sys.argv[1], process=False)
 print(f'  metric mesh {sys.argv[1]}: extents {m.extents} m, largest {max(m.extents):.3f} m')
 " "$metric_obj"
 
+# --- 4b: the depth map's scale, from the object's size --------------------------
+# UniDepth's ego depth has a free global scale, and the first ego run put the
+# pot metres away for want of an anchor. With the size stated, the object is
+# its own anchor: its apparent size in the mask says how far it must be.
+DEPTH_SCALE="${EGO_DEPTH_SCALE:-1.0}"
+if [ -n "${EGO_OBJECT_SIZE:-}" ] && [ -z "${EGO_DEPTH_SCALE:-}" ]; then
+    log "4b depth scale from the object's size"
+    python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" --mesh "$metric_obj"
+    DEPTH_SCALE=$(python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
+        --mesh "$metric_obj" --factor_only)
+fi
+log "depth scale for the ego track: $DEPTH_SCALE"
+
 # --- 5: FoundationPose in the ego camera -----------------------------------------
 # No --reinit_every: a pot's orientation is observable, and re-registering
 # every frame would spin it. The hands stand in for the person in the depth
@@ -153,7 +168,7 @@ else
     python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
         --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
-        --erode_depth_thres "$EGO_ERODE" \
+        --erode_depth_thres "$EGO_ERODE" --depth_scale "$DEPTH_SCALE" \
         --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K"
 fi
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
