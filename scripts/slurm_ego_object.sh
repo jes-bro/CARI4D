@@ -149,8 +149,12 @@ DEPTH_SCALE="${EGO_DEPTH_SCALE:-1.0}"
 if [ -n "${EGO_OBJECT_SIZE:-}" ] && [ -z "${EGO_DEPTH_SCALE:-}" ]; then
     log "4b depth scale from the object's size"
     python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" --mesh "$metric_obj"
+    # tail -1: the video reader prints a warning on stdout before the number.
     DEPTH_SCALE=$(python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
-        --mesh "$metric_obj" --factor_only)
+        --mesh "$metric_obj" --factor_only 2>/dev/null | tail -1)
+    case "$DEPTH_SCALE" in
+        ''|*[!0-9.]*) echo "ERROR: depth scale came out as '$DEPTH_SCALE'" >&2; exit 1 ;;
+    esac
 fi
 log "depth scale for the ego track: $DEPTH_SCALE"
 

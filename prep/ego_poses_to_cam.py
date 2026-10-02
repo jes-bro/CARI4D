@@ -139,7 +139,11 @@ def main():
              residual=np.zeros(len(xyz_frames)))
 
     depth_pipe = out_poses[:, 0, :3, 3] @ np.array([0, 0, 1.0])
+    kept = [i for i, k in enumerate(frames) if k in out_frames]
+    depth_ego = poses[kept, 0, 2, 3]
     print(f"{len(out_frames)}/{len(frames)} frames carried into {args.cam}")
+    print(f"  object distance from the ego camera: {depth_ego.min():.2f}-{depth_ego.max():.2f} m "
+          f"(median {np.median(depth_ego):.2f}) -- a handheld object should be well under 1 m")
     if no_track:
         print(f"  {len(no_track)} frame(s) had no ego pose (FoundationPose lost the object)")
     if missing_pose:
