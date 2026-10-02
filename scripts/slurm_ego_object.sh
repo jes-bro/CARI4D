@@ -48,6 +48,12 @@
 #                       is turned back; the rectified clip is a quarter turn
 #                       from upright, which a monocular depth model has never
 #                       seen. 0 feeds it the frame as rectified
+#   EGO_RECOVER (0.3)   lost-track alarm: when the tracked mesh's outline overlaps
+#                       the ego object mask by less than this IoU, the pose is
+#                       moved back onto the mask with its orientation kept and
+#                       refined again (never re-registered, so it cannot flip).
+#                       The pot's track slid onto the handle as the pan tilted
+#                       and never returned. 0 disables
 #   EGO_RGB_ONLY=1      FoundationPose refines on appearance only; the depth
 #                       map seeds the first frame and is otherwise ignored.
 #                       For when the pot lands a constant distance too far
@@ -83,12 +89,13 @@ EGO_ZFAR="${EGO_ZFAR:-3}"
 EGO_ERODE="${EGO_ERODE:-0.005}"
 EGO_BAND="${EGO_BAND:-1.0}"
 DEPTH_MAD_K="${DEPTH_MAD_K:-3.0}"
+EGO_RECOVER="${EGO_RECOVER:-0.3}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "seq=$SEQ  ego seq=$EGO_PIPE_SEQ  pipeline cam=$PIPE_CAM"
 log "ego clip=$EGO_CLIP"
-log "knobs: zfar=$EGO_ZFAR erode=$EGO_ERODE band=$EGO_BAND mad_k=$DEPTH_MAD_K"
+log "knobs: zfar=$EGO_ZFAR erode=$EGO_ERODE band=$EGO_BAND mad_k=$DEPTH_MAD_K recover=$EGO_RECOVER"
 
 for required in "$EGO_CLIP" "$EGO_MASKS" "$ARIA_CALIB" "$ARIA_EXTRINSICS" "$WINDOW_JSON" "$CALIB"; do
     [ -e "$required" ] || { echo "ERROR: missing input: $required" >&2; exit 1; }
@@ -241,7 +248,7 @@ ego_pkl="$EGO_FP_DIR/${EGO_PIPE_SEQ}_all.pkl"
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
         --erode_depth_thres "$EGO_ERODE" "${DEPTH_SCALE_ARGS[@]}" \
         --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K" \
-        ${EGO_RGB_ONLY:+--rgb_only}
+        --recover_overlap "$EGO_RECOVER" ${EGO_RGB_ONLY:+--rgb_only}
 }
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 

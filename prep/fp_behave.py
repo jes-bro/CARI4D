@@ -152,6 +152,73 @@ def report_depth_coverage(depth, mask_o, frame_time, zfar):
               f'object is zero or beyond zfar={zfar}. '
               f'prep/check_object_depth.py compares the depth map against the '
               f'distance the silhouette implies.')
+
+
+def silhouette_overlap(pose, verts_h, faces, K, mask_o, mask_h):
+    """IoU of the posed mesh's silhouette with the object mask, outside the human mask.
+
+    Holes enclosed by the object mask are filled first: SAM3 leaves the milk
+    out of a pot seen from above, and the mesh has a bottom. Pixels under the
+    human mask count for nothing either way: a hand on the handle hides part
+    of the object, and that says nothing about where the object is.
+
+    Args:
+        pose: (4, 4) object-in-camera pose of the mesh as stored.
+        verts_h: (N, 4) homogeneous mesh vertices.
+        faces: (F, 3) vertex indices.
+        K: (3, 3) intrinsics of the image the masks are in.
+        mask_o: boolean object mask.
+        mask_h: boolean human mask, or None.
+    """
+    from scipy.ndimage import binary_fill_holes
+    from prep.render_object_masks import silhouette
+    H, W = mask_o.shape[:2]
+    sil = silhouette((pose @ verts_h.T).T[:, :3], faces, K, H, W)
+    target = binary_fill_holes(mask_o)
+    valid = ~mask_h if mask_h is not None else np.ones_like(target)
+    union = int(((sil | target) & valid).sum())
+    return int((sil & target & valid).sum()) / union if union else 0.0
+
+
+def recover_track(est, pose, verts_h, faces, K, color, depth, mask_o, mask_h, frame_time,
+                  threshold, rgb_only):
+    """Put a track that has left the object's mask back on it, orientation untouched.
+
+    Tracking only ever follows the previous frame, so once the pose slides off
+    the object -- the pot's track slid onto its handle as the pan tilted to
+    pour -- nothing brings it back. The mask is the one thing known in every
+    frame, so it is the alarm: when the tracked mesh's silhouette overlaps it
+    by less than `threshold`, the pose's translation is moved to where
+    registration would seed it (the mask's centre, at the depth inside the
+    mask) and the refiner runs again from there.
+
+    The rotation is the one tracking already had. It is never re-guessed, so
+    a recovery cannot flip the object; it can only be carried forward and
+    refined as on any other frame.
+
+    Returns the pose to use for this frame; prints one line per recovery with
+    the overlap before and after and both distances, which is also the record
+    of whether the depth inside the mask was believable when the track left.
+    """
+    before = silhouette_overlap(pose, verts_h, faces, K, mask_o, mask_h)
+    if before >= threshold:
+        return pose
+    centre = est.guess_translation(depth=depth, mask=mask_o, K=K)
+    if np.allclose(centre, np.zeros(3)):
+        print(f'[recover] frame {frame_time}: overlap {before:.2f} but no depth inside the mask, pose kept')
+        return pose
+    was = float(est.pose_last.reshape(4, 4)[2, 3])
+    reseated = est.pose_last.clone()
+    reseated[..., :3, 3] = torch.as_tensor(centre, device=reseated.device, dtype=reseated.dtype)
+    est.pose_last = reseated
+    pose = est.track_one(rgb=color, depth=depth, K=K, iteration=5, rgb_only=rgb_only)
+    after = silhouette_overlap(pose, verts_h, faces, K, mask_o, mask_h)
+    print(f'[recover] frame {frame_time}: overlap {before:.2f} < {threshold:g}, moved back onto the mask '
+          f'(distance {was:.2f} m -> {float(centre[2]):.2f} m from the depth in the mask), '
+          f'overlap now {after:.2f}')
+    return pose
+
+
 import nvdiffrast.torch as dr
 import signal
 from scipy.spatial.transform import Rotation as R
@@ -197,6 +264,11 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
 
         pose_dict, pose_hist_dict = {}, {}
         reinit_every = args.reinit_every if args.reinit_every is not None else len(self.times) + 10
+        recover_overlap = float(getattr(args, 'recover_overlap', 0.0) or 0.0)
+        verts_h = np.concatenate([np.asarray(mesh.vertices, dtype=np.float64),
+                                  np.ones((len(mesh.vertices), 1))], axis=1)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        n_recovered = 0
 
         for enum_idx, k in enumerate(kids):
             tar_mask = h5py.File(self.tar_path.replace('_masks_k0.h5', f'_masks_k{k}.h5'), 'r')
@@ -315,6 +387,11 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                     # run tracking mode
                     pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5,
                                          rgb_only=bool(getattr(args, 'rgb_only', False)))
+                    if recover_overlap > 0 and mask_o.any():
+                        tracked = pose
+                        pose = recover_track(est, pose, verts_h, faces, K_all[k], color, depth, mask_o, mask_h,
+                                             frame_time, recover_overlap, bool(getattr(args, 'rgb_only', False)))
+                        n_recovered += pose is not tracked
                 if frame_time not in pose_hist_dict:
                     pose_hist_dict[frame_time] = []
                 if frame_time not in pose_dict:
@@ -355,6 +432,8 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
         out_dict = {"fp_poses": pose_all, "frames": frames}
         joblib.dump(out_dict, output_path)
         print('all done, saved to', output_path, 'pose_all:', pose_all.shape)
+        if recover_overlap > 0:
+            print(f'[recover] {n_recovered} of {len(frames)} frames were moved back onto the mask')
         if args.viz_path is not None:
             vw.close()
             print(f'visualization saved to {viz_file}')
@@ -525,6 +604,13 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                                  "comes from the depth inside the mask. For a monocular depth "
                                  "whose scale is not trusted: the object's distance then comes "
                                  "from its apparent size against the (metric) mesh")
+        parser.add_argument("--recover_overlap", default=0.0, type=float,
+                            help="when the tracked mesh's silhouette overlaps the object mask "
+                                 "by less than this IoU, keep the orientation and move the pose "
+                                 "back onto the mask (its centre, at the depth inside it), then "
+                                 "refine again. For a track that slides off the object and "
+                                 "cannot find its way back; never re-registers, so it cannot "
+                                 "flip the object. 0 disables (default: 0.0)")
         parser.add_argument("--zfar", default=8.0, type=float,
                             help="depth beyond this many metres is discarded. The 8m "
                                  "default matches BEHAVE's indoor capture volume; raise "
