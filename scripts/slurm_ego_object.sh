@@ -41,6 +41,9 @@
 #                       replaces the depth fit (a saucepan with handle: ~0.35)
 #                       and anchors the depth map's scale to the object
 #   EGO_DEPTH_SCALE     that depth factor typed by hand, instead of measured
+#   EGO_DEPTH_ANCHOR    size (default with EGO_OBJECT_SIZE) | sfm | none; sfm
+#                       scales the depth per frame from the Aria trajectory
+#                       and needs no object size (prep/estimate_depth_scale_sfm.py)
 #   EGO_RGB_ONLY=1      FoundationPose refines on appearance only; the depth
 #                       map seeds the first frame and is otherwise ignored.
 #                       For when the pot lands a constant distance too far
@@ -146,22 +149,44 @@ m = trimesh.load(sys.argv[1], process=False)
 print(f'  metric mesh {sys.argv[1]}: extents {m.extents} m, largest {max(m.extents):.3f} m')
 " "$metric_obj"
 
-# --- 4b: the depth map's scale, from the object's size --------------------------
+# --- 4b: the depth map's scale ------------------------------------------------------
 # UniDepth's ego depth has a free global scale, and the first ego run put the
-# pot metres away for want of an anchor. With the size stated, the object is
-# its own anchor: its apparent size in the mask says how far it must be.
+# pot too far for want of an anchor. Two anchors exist:
+#   size  (default when EGO_OBJECT_SIZE is set): the object's apparent size in
+#         the mask against its known size says how far it must be; one global
+#         factor
+#   sfm   the Aria's metric trajectory: static features triangulated between
+#         frames a few centimetres apart give true depth at those pixels; a
+#         factor per frame, no object size needed
+#   none  trust the depth map as is
+lo=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['chosen']['lo'])" "$WINDOW_JSON")
+EGO_DEPTH_ANCHOR="${EGO_DEPTH_ANCHOR:-$([ -n "${EGO_OBJECT_SIZE:-}" ] && echo size || echo none)}"
 DEPTH_SCALE="${EGO_DEPTH_SCALE:-1.0}"
-if [ -n "${EGO_OBJECT_SIZE:-}" ] && [ -z "${EGO_DEPTH_SCALE:-}" ]; then
-    log "4b depth scale from the object's size"
-    python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" --mesh "$metric_obj"
-    # tail -1: the video reader prints a warning on stdout before the number.
-    DEPTH_SCALE=$(python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
-        --mesh "$metric_obj" --factor_only 2>/dev/null | tail -1)
-    case "$DEPTH_SCALE" in
-        ''|*[!0-9.]*) echo "ERROR: depth scale came out as '$DEPTH_SCALE'" >&2; exit 1 ;;
-    esac
-fi
-log "depth scale for the ego track: $DEPTH_SCALE"
+DEPTH_SCALE_ARGS=(--depth_scale "$DEPTH_SCALE")
+case "$EGO_DEPTH_ANCHOR" in
+    size)
+        if [ -z "${EGO_DEPTH_SCALE:-}" ]; then
+            log "4b depth scale from the object's size"
+            python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" --mesh "$metric_obj"
+            # tail -1: the video reader prints a warning on stdout before the number.
+            DEPTH_SCALE=$(python prep/estimate_depth_scale.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
+                --mesh "$metric_obj" --factor_only 2>/dev/null | tail -1)
+            case "$DEPTH_SCALE" in
+                ''|*[!0-9.]*) echo "ERROR: depth scale came out as '$DEPTH_SCALE'" >&2; exit 1 ;;
+            esac
+            DEPTH_SCALE_ARGS=(--depth_scale "$DEPTH_SCALE")
+        fi
+        log "depth scale for the ego track: $DEPTH_SCALE (from the object's size)" ;;
+    sfm)
+        log "4b depth scale per frame from the Aria trajectory"
+        python prep/estimate_depth_scale_sfm.py --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
+            --aria_extrinsics "$ARIA_EXTRINSICS" --offset "$lo" --out "$EGO_RECT_DIR/depth_scale.npz"
+        DEPTH_SCALE_ARGS=(--depth_scale_file "$EGO_RECT_DIR/depth_scale.npz")
+        log "depth scale for the ego track: per frame, $EGO_RECT_DIR/depth_scale.npz" ;;
+    none)
+        log "depth scale for the ego track: $DEPTH_SCALE (no anchor)" ;;
+    *) echo "ERROR: EGO_DEPTH_ANCHOR must be size, sfm or none (got '$EGO_DEPTH_ANCHOR')" >&2; exit 1 ;;
+esac
 
 # --- 5: FoundationPose in the ego camera -----------------------------------------
 # No --reinit_every: a pot's orientation is observable, and re-registering
@@ -177,14 +202,13 @@ else
     python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
         --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
-        --erode_depth_thres "$EGO_ERODE" --depth_scale "$DEPTH_SCALE" \
+        --erode_depth_thres "$EGO_ERODE" "${DEPTH_SCALE_ARGS[@]}" \
         --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K" \
         ${EGO_RGB_ONLY:+--rgb_only}
 fi
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 
 # --- 6: into the pipeline camera ----------------------------------------------------
-lo=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['chosen']['lo'])" "$WINDOW_JSON")
 log "6 ego poses -> $PIPE_CAM (clip frame 0 = take frame $lo)"
 mkdir -p "$FP_DIR" "$(dirname "$OBJECT_XYZ_EGO")"
 python prep/ego_poses_to_cam.py --fp_pkl "$ego_pkl" --calib "$CALIB" --cam "$PIPE_CAM" \

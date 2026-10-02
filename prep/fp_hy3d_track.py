@@ -43,7 +43,18 @@ class BehaveHy3DTrackFPRunner(FPBehaveVideoProcessor):
         after the mm->m conversion and before the zfar clip.
         """
         scale = float(getattr(self.args, 'depth_scale', 1.0) or 1.0)
-        if scale != 1.0 and not getattr(self, '_depth_scale_said', False):
+        per_frame = getattr(self.args, 'depth_scale_file', None)
+        if per_frame:
+            if not hasattr(self, '_depth_factors'):
+                import numpy as np
+                self._depth_factors = np.load(per_frame)['factor']
+                print(f'per-frame depth scale from {per_frame}: '
+                      f'{len(self._depth_factors)} frames, median {float(np.median(self._depth_factors)):.4f}')
+            import re
+            m = re.search(r'\d+', str(getattr(self, 'current_frame_time', '0')))
+            idx = min(int(m.group(0)) if m else 0, len(self._depth_factors) - 1)
+            scale = float(self._depth_factors[idx])
+        elif scale != 1.0 and not getattr(self, '_depth_scale_said', False):
             print(f'scaling depth by {scale:.4f}')
             self._depth_scale_said = True
         return depth * scale
@@ -53,6 +64,9 @@ if __name__ == '__main__':
     parser.add_argument('--depth_scale', type=float, default=1.0,
                         help='multiply the depth map by this before use; the factor from '
                              'prep/estimate_depth_scale.py for a monocular depth of unknown scale')
+    parser.add_argument('--depth_scale_file', default=None,
+                        help='.npz with a per-frame "factor" array (prep/estimate_depth_scale_sfm.py); '
+                             'overrides --depth_scale frame by frame')
     args = parser.parse_args()
 
     if osp.isfile(args.video):

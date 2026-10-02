@@ -224,6 +224,9 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                 color = cv2.resize(color, (int(w / self.scale_ratio), int(h / self.scale_ratio)))
                 depth = cv2.resize(depth, (int(w / self.scale_ratio), int(h / self.scale_ratio)),
                                    cv2.INTER_NEAREST) / 1000.
+                # process_depth has no frame argument; subclasses that scale
+                # depth per frame read which frame this is from here.
+                self.current_frame_time = frame_time
                 depth = self.process_depth(depth)
 
                 depth[(depth < 0.001) | (depth >= zfar)] = 0
