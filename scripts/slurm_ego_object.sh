@@ -199,7 +199,11 @@ if [ -f "$ego_pkl" ] && [ -z "${FORCE_FP:-}" ] && [ -z "${EGO_OBJECT_SIZE:-}" ];
     log "5 foundationpose: already done ($ego_pkl); FORCE_FP=1 to redo"
 else
     log "5 foundationpose on the ego clip"
-    python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
+    # --redo: the tracker otherwise exits on an existing per-camera pickle
+    # ("Already exists ..._all_k0.pkl, all done") and every change to the mesh,
+    # the depth scale or the refinement mode goes unused. Whether to reuse a
+    # track is decided above, not inside the tracker.
+    python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 --redo \
         --masks_root "$EGO_RECT_DIR" --hy3d_root="$EGO_MESH_DIR-metric" \
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
         --erode_depth_thres "$EGO_ERODE" "${DEPTH_SCALE_ARGS[@]}" \
