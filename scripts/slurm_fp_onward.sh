@@ -135,6 +135,16 @@ python prep/fp_hy3d_track.py --viz_path x --wild_video --kid 0 \
 fi
 
 # Step 6: CoCoNet refinement (verbatim from demo-custom.sh).
+# run_horefine.py returns early when its output already exists. This job's
+# whole purpose is to redo everything from FoundationPose onward, so a cached
+# CoCoNet result is never what is wanted here: it handed the optimizer the
+# previous run's object track -- the exo one -- on every ego rerun. Removed
+# first, with a line in the log saying so.
+coconet_pth="${coconet_out}/${exp_name}+${exp_step}${identifier}/${video_prefix}.pth"
+if [ -f "$coconet_pth" ]; then
+    log "removing cached CoCoNet result $coconet_pth so step 6 recomputes it"
+    rm -f "$coconet_pth"
+fi
 python run_horefine.py config=learning/configs/cari4d-release.yml split_file=splits/demo-behave.json \
 use_sel_view=True render_video=True identifier=${identifier} use_intermediate=False data_name=test-only \
 hy3d_meshes_root=${hy3d_root}-metric \

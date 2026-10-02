@@ -37,6 +37,8 @@
 #   EGO_ZFAR   (3)      furthest depth kept, metres
 #   EGO_ERODE  (0.005)  depth erosion threshold, metres: Z/f with margin
 #   EGO_BAND   (1.0)    object-to-hands depth band, metres
+#   EGO_OBJECT_SIZE     the object's longest dimension in metres, when known;
+#                       replaces the depth fit (a saucepan with handle: ~0.35)
 
 set -euo pipefail
 
@@ -115,10 +117,20 @@ log "3 mesh for the ego run: $ego_mesh_dir"
 # --- 4: metric scale, fitted in the ego view -------------------------------------
 # Render-and-fit against this clip's depth on the frame where the object mask
 # is largest. The erosion threshold derives from Z/f for this camera.
-log "4 metric scale"
-python tools/estimate_scale_video.py --wild_video --video "$RECT_CLIP" \
-    --masks_root "$EGO_RECT_DIR" --hy3d_root "$EGO_MESH_DIR" -o "$EGO_MESH_DIR-metric" \
-    --erode_depth_thres auto
+if [ -n "${EGO_OBJECT_SIZE:-}" ]; then
+    # The person knows the object. A stated longest dimension in metres beats
+    # a fit against monocular depth, and is what to reach for when the fit
+    # comes out visibly wrong.
+    log "4 metric scale: stated, longest axis $EGO_OBJECT_SIZE m"
+    rm -rf "$EGO_MESH_DIR-metric"
+    python prep/scale_mesh_to_size.py --mesh "$ego_mesh_dir/${EGO_PIPE_SEQ}_${frame}_align.obj" \
+        --size "$EGO_OBJECT_SIZE" --out_root "$EGO_MESH_DIR-metric"
+else
+    log "4 metric scale: fitted to the ego depth"
+    python tools/estimate_scale_video.py --wild_video --video "$RECT_CLIP" \
+        --masks_root "$EGO_RECT_DIR" --hy3d_root "$EGO_MESH_DIR" -o "$EGO_MESH_DIR-metric" \
+        --erode_depth_thres auto
+fi
 metric_obj=$(ls "$EGO_MESH_DIR-metric"/*/*_align.obj 2>/dev/null | head -1 || true)
 [ -n "$metric_obj" ] || { echo "ERROR: scale step wrote no mesh under $EGO_MESH_DIR-metric" >&2; exit 1; }
 python -c "
@@ -132,7 +144,9 @@ print(f'  metric mesh {sys.argv[1]}: extents {m.extents} m, largest {max(m.exten
 # every frame would spin it. The hands stand in for the person in the depth
 # band test, which is what the ego masks' person channel holds.
 ego_pkl="$EGO_FP_DIR/${EGO_PIPE_SEQ}_all.pkl"
-if [ -f "$ego_pkl" ] && [ -z "${FORCE_FP:-}" ]; then
+# A stated size changes the mesh the poses were fitted with, so the track is
+# redone then as well; a cached one would carry the old scale's translations.
+if [ -f "$ego_pkl" ] && [ -z "${FORCE_FP:-}" ] && [ -z "${EGO_OBJECT_SIZE:-}" ]; then
     log "5 foundationpose: already done ($ego_pkl); FORCE_FP=1 to redo"
 else
     log "5 foundationpose on the ego clip"
