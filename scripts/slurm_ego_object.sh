@@ -48,12 +48,21 @@
 #                       is turned back; the rectified clip is a quarter turn
 #                       from upright, which a monocular depth model has never
 #                       seen. 0 feeds it the frame as rectified
-#   EGO_RECOVER (0.3)   lost-track alarm: when the tracked mesh's outline overlaps
+#   EGO_ORIENT_EVERY (5) SAM 3D Objects runs on every Nth ego frame and the
+#                       tracker's orientation is held to what it says there
+#                       (prep/sam3d_orientations.py). FoundationPose turned the
+#                       pot backwards -- a symmetric body, the handle under the
+#                       hand -- and SAM 3D, which reads the picture as a pot,
+#                       had the handle right on every keyframe tried. 0 disables.
+#                       Needs SAM3D_ROOT (a clone with checkpoints; the repo's
+#                       child or sibling sam-3d-objects is found on its own)
+#   EGO_RECOVER (0)     lost-track alarm: when the tracked mesh's outline overlaps
 #                       the ego object mask by less than this IoU, the pose is
 #                       moved back onto the mask with its orientation kept and
 #                       refined again (never re-registered, so it cannot flip).
-#                       The pot's track slid onto the handle as the pan tilted
-#                       and never returned. 0 disables
+#                       Off by default: on the pot it fired on nearly every
+#                       frame and fought the tracker; the keyframes above do
+#                       the re-seating now
 #   EGO_RGB_ONLY=1      FoundationPose refines on appearance only; the depth
 #                       map seeds the first frame and is otherwise ignored.
 #                       For when the pot lands a constant distance too far
@@ -89,13 +98,14 @@ EGO_ZFAR="${EGO_ZFAR:-3}"
 EGO_ERODE="${EGO_ERODE:-0.005}"
 EGO_BAND="${EGO_BAND:-1.0}"
 DEPTH_MAD_K="${DEPTH_MAD_K:-3.0}"
-EGO_RECOVER="${EGO_RECOVER:-0.3}"
+EGO_RECOVER="${EGO_RECOVER:-0}"
+EGO_ORIENT_EVERY="${EGO_ORIENT_EVERY:-5}"
 
 log "host=$(hostname) job=${SLURM_JOB_ID:-none} env=${CONDA_DEFAULT_ENV:-none}"
 log "code=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo +dirty)"
 log "seq=$SEQ  ego seq=$EGO_PIPE_SEQ  pipeline cam=$PIPE_CAM"
 log "ego clip=$EGO_CLIP"
-log "knobs: zfar=$EGO_ZFAR erode=$EGO_ERODE band=$EGO_BAND mad_k=$DEPTH_MAD_K recover=$EGO_RECOVER"
+log "knobs: zfar=$EGO_ZFAR erode=$EGO_ERODE band=$EGO_BAND mad_k=$DEPTH_MAD_K recover=$EGO_RECOVER orient_every=$EGO_ORIENT_EVERY"
 
 for required in "$EGO_CLIP" "$EGO_MASKS" "$ARIA_CALIB" "$ARIA_EXTRINSICS" "$WINDOW_JSON" "$CALIB"; do
     [ -e "$required" ] || { echo "ERROR: missing input: $required" >&2; exit 1; }
@@ -131,6 +141,7 @@ archive "$EGO_RECT_DIR/depth_scale.npz"
 archive "$EGO_RECT_DIR/$EGO_PIPE_SEQ.0.depth-reg.mp4"
 if [ -n "${FORCE_ALL:-}" ]; then
     archive "$EGO_RECT_DIR"
+    archive "$EGO_MESH_DIR-keys"
 fi
 
 # --- 1: pinhole ------------------------------------------------------------------
@@ -231,6 +242,32 @@ case "$EGO_DEPTH_ANCHOR" in
     *) echo "ERROR: EGO_DEPTH_ANCHOR must be size, sfm or none (got '$EGO_DEPTH_ANCHOR')" >&2; exit 1 ;;
 esac
 
+# --- 4c: the object's orientation at keyframes, from SAM 3D Objects ------------
+# The keyframe reconstructions depend only on the rectified clip and its
+# masks, so they stay between runs (run_sam3d_recon.py skips a frame whose
+# pose exists; FORCE_ALL moves them aside). The orientation file depends on
+# the mesh and lives with the track, which is moved aside every run.
+ORIENT_ARGS=()
+if [ "$EGO_ORIENT_EVERY" != 0 ]; then
+    KEY_DIR="$EGO_MESH_DIR-keys"
+    if [ -z "${SAM3D_ROOT:-}" ]; then
+        for candidate in "$REPO/sam-3d-objects" "$(dirname "$REPO")/sam-3d-objects"; do
+            [ -f "$candidate/checkpoints/${SAM3D_TAG:-hf}/pipeline.yaml" ] && SAM3D_ROOT="$candidate" && break
+        done
+        [ -n "${SAM3D_ROOT:-}" ] || { echo "ERROR: no SAM 3D Objects clone with checkpoints beside or inside the repo; set SAM3D_ROOT (or EGO_ORIENT_EVERY=0)" >&2; exit 1; }
+    fi
+    n_frames=$(python -c "import cv2, sys; print(int(cv2.VideoCapture(sys.argv[1]).get(cv2.CAP_PROP_FRAME_COUNT)))" "$RECT_CLIP")
+    log "4c keyframe orientations: SAM 3D Objects on every ${EGO_ORIENT_EVERY}th of $n_frames frames -> $KEY_DIR"
+    # The SAM 3D job script activates its own env in its own shell.
+    REPO="$REPO" HY3D_ROOT="$KEY_DIR" MASKS_ROOT="$EGO_RECT_DIR" SAM3D_ROOT="$SAM3D_ROOT" \
+        bash scripts/slurm_sam3d_recon.sh "$RECT_CLIP" 0 \
+            --frames "0:$n_frames:$EGO_ORIENT_EVERY" --pose_only --fill_mask_holes
+    python prep/sam3d_orientations.py --keyframes_root "$KEY_DIR" --canonical_dir "$ego_mesh_dir" \
+        --mesh "$metric_obj" --video "$RECT_CLIP" --masks_root "$EGO_RECT_DIR" \
+        --out "$EGO_FP_DIR/orientations.npz" --viz
+    ORIENT_ARGS=(--orient_file "$EGO_FP_DIR/orientations.npz")
+fi
+
 # --- 5: FoundationPose in the ego camera -----------------------------------------
 # No --reinit_every: a pot's orientation is observable, and re-registering
 # every frame would spin it. The hands stand in for the person in the depth
@@ -248,7 +285,8 @@ ego_pkl="$EGO_FP_DIR/${EGO_PIPE_SEQ}_all.pkl"
         --video "$RECT_CLIP" -o "$EGO_FP_DIR" --zfar "$EGO_ZFAR" -tstart 0 \
         --erode_depth_thres "$EGO_ERODE" "${DEPTH_SCALE_ARGS[@]}" \
         --depth_human_band "$EGO_BAND" --depth_mad_k "$DEPTH_MAD_K" \
-        --recover_overlap "$EGO_RECOVER" ${EGO_RGB_ONLY:+--rgb_only}
+        --recover_overlap "$EGO_RECOVER" ${EGO_RGB_ONLY:+--rgb_only} \
+        ${ORIENT_ARGS[@]+"${ORIENT_ARGS[@]}"}
 }
 [ -f "$ego_pkl" ] || { echo "ERROR: FoundationPose wrote no $ego_pkl" >&2; exit 1; }
 

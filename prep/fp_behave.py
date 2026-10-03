@@ -11,6 +11,7 @@ run foundationpose on behave
 """
 import json
 import joblib
+import re
 import sys, os
 import os.path as osp
 from glob import glob
@@ -219,6 +220,42 @@ def recover_track(est, pose, verts_h, faces, K, color, depth, mask_o, mask_h, fr
     return pose
 
 
+def load_orientations(path):
+    """{clip frame index: (3, 3) rotation} from prep/sam3d_orientations.py's .npz."""
+    d = np.load(path)
+    out = {int(f): np.asarray(R, dtype=np.float64) for f, R in zip(d['frames'], d['R'])}
+    print(f'[orient] {len(out)} keyframe orientations from {path}: frames {min(out)}..{max(out)}')
+    return out
+
+
+def hold_orientation(est, R, color, depth, mask_o, K, frame_time, rgb_only):
+    """Set the tracker's orientation to R at a keyframe, re-seat it on the mask, refine once.
+
+    SAM 3D Objects, run on this frame, said which way the object is turned
+    (prep/sam3d_orientations.py). The tracker's own orientation is replaced
+    by it, its position is moved to where registration would seed it (the
+    mask's centre at the depth inside it) when that depth exists, and the
+    refiner runs from there as on any frame. Between keyframes tracking
+    continues from the last held orientation, so a flip cannot survive
+    longer than the keyframe spacing.
+
+    Returns the pose for this frame; prints how far the track had drifted
+    from the keyframe orientation, which is the record of how badly it
+    needed holding.
+    """
+    pl = est.pose_last.reshape(4, 4).clone()
+    R_t = torch.as_tensor(R, device=pl.device, dtype=pl.dtype)
+    drift = float(torch.rad2deg(torch.acos((((pl[:3, :3].T @ R_t).trace() - 1) / 2).clamp(-1, 1))))
+    pl[:3, :3] = R_t
+    centre = est.guess_translation(depth=depth, mask=mask_o, K=K)
+    if not np.allclose(centre, np.zeros(3)):
+        pl[:3, 3] = torch.as_tensor(centre, device=pl.device, dtype=pl.dtype)
+    est.pose_last = pl
+    pose = est.track_one(rgb=color, depth=depth, K=K, iteration=5, rgb_only=rgb_only)
+    print(f'[orient] frame {frame_time}: held to the keyframe orientation, the track was {drift:.0f} deg off')
+    return pose
+
+
 import nvdiffrast.torch as dr
 import signal
 from scipy.spatial.transform import Rotation as R
@@ -269,6 +306,8 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                                   np.ones((len(mesh.vertices), 1))], axis=1)
         faces = np.asarray(mesh.faces, dtype=np.int64)
         n_recovered = 0
+        orientations = load_orientations(args.orient_file) if getattr(args, 'orient_file', None) else {}
+        rgb_only = bool(getattr(args, 'rgb_only', False))
 
         for enum_idx, k in enumerate(kids):
             tar_mask = h5py.File(self.tar_path.replace('_masks_k0.h5', f'_masks_k{k}.h5'), 'r')
@@ -383,14 +422,26 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                             print(f'[fp] registered at frame {frame_time}; back-filling {len(deferred)} deferred '
                                   f'frame(s) {deferred} with this pose')
                         is_first_frame = False
+                        # Registration picks an orientation by appearance, which
+                        # on a symmetric object can be the wrong one; a keyframe
+                        # orientation for this frame overrides it right away.
+                        frame_index = int(re.search(r'\d+', str(frame_time)).group(0))
+                        if frame_index in orientations:
+                            pose = hold_orientation(est, orientations[frame_index], color, depth, mask_o,
+                                                    K_all[k], frame_time, rgb_only)
                 else:
                     # run tracking mode
-                    pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5,
-                                         rgb_only=bool(getattr(args, 'rgb_only', False)))
+                    frame_index = int(re.search(r'\d+', str(frame_time)).group(0))
+                    if frame_index in orientations:
+                        pose = hold_orientation(est, orientations[frame_index], color, depth, mask_o,
+                                                K_all[k], frame_time, rgb_only)
+                    else:
+                        pose = est.track_one(rgb=color, depth=depth, K=K_all[k], iteration=5,
+                                             rgb_only=rgb_only)
                     if recover_overlap > 0 and mask_o.any():
                         tracked = pose
                         pose = recover_track(est, pose, verts_h, faces, K_all[k], color, depth, mask_o, mask_h,
-                                             frame_time, recover_overlap, bool(getattr(args, 'rgb_only', False)))
+                                             frame_time, recover_overlap, rgb_only)
                         n_recovered += pose is not tracked
                 if frame_time not in pose_hist_dict:
                     pose_hist_dict[frame_time] = []
@@ -604,6 +655,12 @@ class FPBehaveVideoProcessor(BaseBehaveVideoData):
                                  "comes from the depth inside the mask. For a monocular depth "
                                  "whose scale is not trusted: the object's distance then comes "
                                  "from its apparent size against the (metric) mesh")
+        parser.add_argument("--orient_file", default=None,
+                            help=".npz from prep/sam3d_orientations.py: the object's rotation at "
+                                 "keyframes. At each keyframe the tracker's orientation is set to "
+                                 "it and its position re-seated on the mask; tracking continues "
+                                 "in between. For an object whose orientation the tracker cannot "
+                                 "tell by appearance (a pot: handle or no handle)")
         parser.add_argument("--recover_overlap", default=0.0, type=float,
                             help="when the tracked mesh's silhouette overlaps the object mask "
                                  "by less than this IoU, keep the orientation and move the pose "

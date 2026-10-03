@@ -117,7 +117,25 @@ def parse_args():
                              "from --video (reconstruct from one camera, track in another)")
     parser.add_argument("--out_frame_index", type=int, default=None,
                         help="Frame index to encode in the output name instead of --frame_index")
+    parser.add_argument("--frames", default=None,
+                        help="Reconstruct several frames in one run, the model loaded once: a "
+                             "comma list (0,90,180) or start:stop:step (0:361:5). Overrides "
+                             "--frame_index; each frame gets its own <seq>_<frame>_rgba/ folder")
+    parser.add_argument("--pose_only", action="store_true",
+                        help="Write the RGBA crop, the GLB and the predicted pose only: no "
+                             "texture baking, no OBJ, no splat. What prep/sam3d_orientations.py "
+                             "needs from a keyframe, at a fraction of the time")
     return parser.parse_args()
+
+
+def parse_frames(spec):
+    """Frame indices from '0,90,180' or 'start:stop:step'."""
+    if ":" in spec:
+        parts = [int(x) for x in spec.split(":")]
+        start, stop = parts[0], parts[1]
+        step = parts[2] if len(parts) > 2 else 1
+        return list(range(start, stop, step))
+    return [int(x) for x in spec.split(",") if x.strip()]
 
 
 def fill_mask_holes(mask):
@@ -286,35 +304,28 @@ def save_pose(output, outdir, out_name, centre, scale):
     print(f"Saved predicted pose: {path} ({', '.join(keys)})")
 
 
-def main():
-    """Run the reconstruction for one video frame.
+def reconstruct_frame(args, inference, seq_name, frame_idx, out_seq, out_frame):
+    """Reconstruct one frame; return the SAM 3D wrapper (loaded here if it was None).
 
     Extracts the frame, loads its object mask, writes the cropped RGBA, runs
     SAM 3D Objects, normalises the mesh, exports the GLB and converts it to
     the <seq>_<frame:03d>_align.obj that fp_hy3d_track.py expects. Returns
-    early if that OBJ already exists, so re-running is cheap.
+    early if that OBJ (or, with --pose_only, the pose) already exists, so
+    re-running is cheap.
     """
-    args = parse_args()
-
-    seq_name = extract_seq_name(args.video)
-    frame_idx = args.frame_index
-    out_seq = args.out_seq or seq_name
-    out_frame = args.out_frame_index if args.out_frame_index is not None else frame_idx
-    if args.out_seq or args.out_frame_index is not None:
-        print(f"Reconstructing from {seq_name} frame {frame_idx}, "
-              f"naming output {out_seq} frame {out_frame}")
-
     out_name = f"{out_seq}_{out_frame:03d}_rgba"
     outdir = osp.join(args.hy3d_root, out_name)
     obj_name = f"{out_name.replace('_rgba', '')}_align.obj"
     obj_path = osp.join(outdir, obj_name)
     rgba_path = osp.join(outdir, f"{out_name}.png")
     glb_path = osp.join(outdir, f"{out_name}.glb")
+    pose_path = osp.join(outdir, f"{out_name}_sam3d_pose.npz")
     os.makedirs(outdir, exist_ok=True)
 
-    if osp.isfile(obj_path) and not args.skip_sam3d:
-        print(f"Output already exists: {obj_path}, skipping.")
-        return
+    done = pose_path if args.pose_only else obj_path
+    if osp.isfile(done) and not args.skip_sam3d:
+        print(f"Output already exists: {done}, skipping.")
+        return inference
 
     if args.hires_video:
         rgb, mask = load_hires_frame_and_mask(
@@ -334,16 +345,20 @@ def main():
 
     if args.skip_sam3d:
         print("Skipping SAM 3D inference (--skip_sam3d)")
-        return
+        return inference
 
-    inference = load_sam3d(args.sam3d_root, args.checkpoint_tag)
-    output = run_sam3d(inference, rgba_img, args.seed, args.vertex_color)
+    if inference is None:
+        inference = load_sam3d(args.sam3d_root, args.checkpoint_tag)
+    output = run_sam3d(inference, rgba_img, args.seed, args.vertex_color or args.pose_only)
 
     mesh = output["glb"]
     centre, scale = normalize_mesh(mesh)
     mesh.export(glb_path)
     print(f"Saved GLB: {glb_path}")
     save_pose(output, outdir, out_name, centre, scale)
+    if args.pose_only:
+        print(f"Done (pose only). Output: {pose_path}")
+        return inference
     if "gs" in output:
         try:
             output["gs"].save_ply(osp.join(outdir, f"{out_name}_splat.ply"))
@@ -359,6 +374,33 @@ def main():
     if not osp.isfile(obj_path):
         raise RuntimeError(f"No OBJ at {obj_path} after conversion")
     print(f"Done. Output: {obj_path}")
+    return inference
+
+
+def main():
+    """Reconstruct one frame (--frame_index) or a list of them (--frames), model loaded once."""
+    args = parse_args()
+
+    seq_name = extract_seq_name(args.video)
+    out_seq = args.out_seq or seq_name
+    if args.frames:
+        frames = parse_frames(args.frames)
+        print(f"Reconstructing {len(frames)} frames of {seq_name}: {frames[0]}..{frames[-1]}")
+        if args.out_frame_index is not None:
+            raise SystemExit("ERROR: --out_frame_index names one frame; it cannot be used with --frames")
+        pairs = [(f, f) for f in frames]
+    else:
+        out_frame = args.out_frame_index if args.out_frame_index is not None else args.frame_index
+        pairs = [(args.frame_index, out_frame)]
+        if args.out_seq or args.out_frame_index is not None:
+            print(f"Reconstructing from {seq_name} frame {args.frame_index}, "
+                  f"naming output {out_seq} frame {out_frame}")
+
+    inference = None
+    for i, (frame_idx, out_frame) in enumerate(pairs):
+        if len(pairs) > 1:
+            print(f"--- frame {frame_idx} ({i + 1}/{len(pairs)}) ---")
+        inference = reconstruct_frame(args, inference, seq_name, frame_idx, out_seq, out_frame)
 
 
 if __name__ == "__main__":
