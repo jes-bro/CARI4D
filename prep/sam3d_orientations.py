@@ -113,20 +113,48 @@ def angle_deg(R):
     return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))))
 
 
-def align_from_identity(src, dst):
-    """ICP of src onto dst from an identity start; returns (rotation, cost)."""
+def align_from_identity(src, dst, initial=None):
+    """ICP of src onto dst from an identity (or given) start; returns (rotation, cost).
+
+    Both sides are sampled to points, so trimesh matches with scipy's KD-tree
+    and never asks for the rtree package, which the pipeline env lacks.
+    """
     import trimesh
-    r = trimesh.registration.icp(src.sample(4000), dst, initial=np.eye(4),
+    r = trimesh.registration.icp(src.sample(4000), dst.sample(8000),
+                                 initial=np.eye(4) if initial is None else initial,
                                  max_iterations=100, scale=False)
     return rotation_of(r[0]), float(r[-1])
 
 
+def axis_rotations():
+    """The 24 rotations that map axes onto axes: every start an axis-converted mesh can need."""
+    import itertools
+    out = []
+    for perm in itertools.permutations(range(3)):
+        for signs in itertools.product((1.0, -1.0), repeat=3):
+            R = np.zeros((3, 3))
+            for i, (p, s) in enumerate(zip(perm, signs)):
+                R[i, p] = s
+            if np.linalg.det(R) > 0:
+                out.append(R)
+    return out
+
+
 def align_multistart(src, dst):
-    """ICP of src onto dst from trimesh's principal-axis starts; returns (rotation, cost)."""
-    import trimesh
-    M, cost = trimesh.registration.mesh_other(src, dst, samples=2000, scale=False,
-                                              icp_first=30, icp_final=100)
-    return rotation_of(M), float(cost)
+    """ICP of src onto dst from every axis-aligned start; returns the best (rotation, cost).
+
+    For the tracked OBJ against the GLB it was converted from, the answer is
+    one of these starts exactly (an axis convention), and ICP only confirms
+    it. For a mesh from another reconstructor it is the best of 24 guesses.
+    """
+    best = None
+    for R0 in axis_rotations():
+        M0 = np.eye(4)
+        M0[:3, :3] = R0
+        R, cost = align_from_identity(src, dst, initial=M0)
+        if best is None or cost < best[1]:
+            best = (R, cost)
+    return best
 
 
 def view_rotation(ray):
