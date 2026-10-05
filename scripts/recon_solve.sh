@@ -166,6 +166,42 @@ job_g=$(recon_sbatch --job-name="s1-$SEQ" \
     scripts/slurm_prep_aligned.sh "$RECT_CLIP")
 log "G  unidepth -> nlf -> smplh -> align  job $job_g"
 
+# --- D: the direct result, no CoCoNet, no optimizer ----------------------------
+# DIRECT=1 (the default with the object from the ego view): the body from the
+# fit and the object from the ego track go straight into the bundle, and the
+# render judges that. H, S and I are skipped. DIRECT=0 restores the
+# refinement chain. prep/export_direct_bundle.py explains the choice.
+DIRECT="${DIRECT:-$([ "$OBJECT_FROM" = ego ] && echo 1 || echo 0)}"
+if [ "$DIRECT" = 1 ]; then
+    [ "$OBJECT_FROM" = ego ] || { echo "ERROR: DIRECT=1 needs OBJECT_FROM=ego (the only track carried into the pipeline camera without FP there)" >&2; exit 1; }
+    RESULT_DIR="output/direct-hy3d"
+    # MESH_DIR-metric, not the OBJ: job E writes that mesh after this line runs,
+    # so the job globs it when it actually starts.
+    job_d=$(PARAMS="$NLF_DIR-opt/${SEQ}_params.pkl" FP_PKL="$FP_DIR/${SEQ}_all.pkl" \
+            MESH_ROOT="$MESH_DIR-metric" OUT="$RESULT_DIR/$SEQ.pth" \
+            recon_sbatch $(recon_dep "$job_g" "$job_e") --job-name="s3d-$SEQ" scripts/slurm_direct_bundle.sh)
+    log "D  direct bundle (fit + ego track)    job $job_d"
+    export HY3D_MESHES_ROOT="$MESH_DIR-metric"
+    job_j=$(EXTRA="${VIZ_EXTRA:-}" recon_sbatch $(recon_dep "$job_d") \
+        --job-name="s4-$SEQ" \
+        scripts/slurm_viz_pred.sh "$RESULT_DIR/$SEQ.pth" "$ALIGNED_CLIP")
+    log "J  render                             job $job_j"
+    recon_check \
+        "grep -E 'frames carried|object distance|motion per frame' ego-object-${job_e}.out" \
+        "# how many ego frames made it into the pipeline camera, and the distances" \
+        "" \
+        "ls -lat output/viz-pred/ | head -3" \
+        "# watch the newest mp4: the body from the fit, the pot from the ego track," \
+        "# nothing refined. What you see is what the evidence says." \
+        "" \
+        "result: $RESULT_DIR/$SEQ.pth"
+    recon_next \
+        "Nothing -- this clip is done (direct)." \
+        "" \
+        "DIRECT=0 reruns with CoCoNet + optimizer instead."
+    exit 0
+fi
+
 # --- H: object depth into the object mask: triangulated, or the ego track's --
 job_h=$(recon_sbatch $(recon_dep "$job_g" "$job_e") \
     --job-name="s2-$SEQ" \
