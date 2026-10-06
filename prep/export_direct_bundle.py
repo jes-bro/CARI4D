@@ -107,8 +107,15 @@ def main():
         "source": {"params": osp.abspath(args.params), "fp_pkl": osp.abspath(args.fp_pkl),
                    "mesh": osp.abspath(args.mesh), "direct": True},
     }
+    # 'gt' carries a copy, not {}. tools/viz_pred.py reads data_gt['smpl_pose'],
+    # 'smpl_t', 'betas' and 'pose_abs' unconditionally, and every bundle it has
+    # rendered before came through CoCoNet, whose dataset fills 'gt' even on a
+    # wild clip with no ground truth (the optimizer replaces only 'pr' and
+    # passes 'gt' through). There is no ground truth here either; this keeps
+    # the reader working and the GT panel, which these clips do not draw,
+    # shows the same thing as the prediction.
     os.makedirs(osp.dirname(osp.abspath(args.out)), exist_ok=True)
-    torch.save({"pr": pr, "in": dict(pr), "gt": {}}, args.out)
+    torch.save({"pr": pr, "in": dict(pr), "gt": dict(pr)}, args.out)
     dist = np.linalg.norm(pose_abs[:, :3, 3] - trans, axis=1)
     print(f"wrote {args.out}: {T} frames, gender {pr['gender']}, object from the ego track")
     print(f"  object centre to body root: {dist.min():.2f}-{dist.max():.2f} m (median {np.median(dist):.2f})")
